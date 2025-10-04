@@ -47,13 +47,13 @@ def webhook(secret):
         condition = data.get("condition", "—")
         time_alert = data.get("time", "—")
 
-        # Link direto pro app da Binance
-        binance_app_link = f"binance://trade/{symbol}_USDT"
+        # Link direto universal (abre app se instalado)
+        binance_link = f"https://www.binance.com/en/trade/{symbol}_USDT?type=spot"
 
         # Escapa underline para o Telegram Markdown não quebrar
         safe_symbol = symbol.replace("_", "\\_")
 
-        # Monta mensagem formatada com o link do app
+        # Monta mensagem formatada com o link seguro
         message = (
             f"🔔 ALERTA\n"
             f"Ativo: {safe_symbol}\n"
@@ -61,7 +61,7 @@ def webhook(secret):
             f"Preço: {price}\n"
             f"Volume: {volume}\n"
             f"Hora: {time_alert}\n\n"
-            f"📱 [Abrir no App da Binance]({binance_app_link})"
+            f"📱 [Abrir na Binance]({binance_link})"
         )
 
         send_telegram_message(message)

@@ -3,51 +3,52 @@ import json
 import requests
 from flask import Flask, request, jsonify
 
-app = Flask(__name__)
+app = Flask(name)
 
-# 🔑 Pegando variáveis de ambiente do Render
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
-WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
+# Pegando variáveis de ambiente do Render
+TOKEN_DE_TELEGRAM = os.getenv('TOKEN_DE_TELEGRAM')
+ID_DO_BATE_PAPO = os.getenv('ID_DO_CHAT')
+WEBHOOK_SECRET = os.getenv('SEGREDO_DO_WEBHOOK')
 
 # Verificação se variáveis existem
-if not TELEGRAM_TOKEN or not CHAT_ID or not WEBHOOK_SECRET:
-    raise ValueError("❌ Variáveis de ambiente TELEGRAM_TOKEN, CHAT_ID e WEBHOOK_SECRET precisam estar configuradas!")
+if not TOKEN_DE_TELEGRAM or not ID_DO_BATE_PAPO or not WEBHOOK_SECRET:
+    raise ValueError("Variáveis de ambiente TELEGRAM_TOKEN, CHAT_ID e WEBHOOK_SECRET precisam estar definidas!")
 
-# 🚀 Função para enviar mensagem ao Telegram
-def send_telegram_message(text):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": CHAT_ID,
-        "text": text,
-        "parse_mode": "HTML"
+# Função para enviar mensagem ao Telegram
+def enviar_mensagem_de_telegram(mensagem):
+    url = f"https://api.telegram.org/bot{TOKEN_DE_TELEGRAM}/sendMessage"
+    carga_util = {
+        "chat_id": ID_DO_BATE_PAPO,
+        "text": mensagem,
+        "parse_mode": "Markdown"
     }
-    r = requests.post(url, json=payload)
-    return r.json()
+    resposta = requests.post(url, json=carga_util)
+    if resposta.status_code != 200:
+        raise ValueError(f"Erro ao enviar mensagem ao Telegram: {resposta.text}")
 
-# 🌍 Rota inicial só para testar se o servidor está vivo
-@app.route("/", methods=["GET"])
-def home():
-    return "✅ Webhook ativo e funcionando!"
-
-# 🎯 Rota do Webhook com o segredo
-@app.route(f"/webhook/{WEBHOOK_SECRET}", methods=["POST"])
+@app.route('/webhook/12345678', methods=['POST'])
 def webhook():
     try:
-        data = request.json
-        print("📩 Recebido:", data)
+        # Log do payload cru para debug
+        raw_body = request.data.decode('utf-8')
+        print(f"Raw body recebido: {raw_body}")
 
-        # Extrai mensagem recebida do TradingView
-        alert_message = data.get("message", "🚨 Alerta recebido, mas sem mensagem definida.")
+        # Parsear JSON
+        dados = request.get_json(silent=True)
+        print(f"Parsed data: {dados}")
 
-        # Envia para o Telegram
-        send_telegram_message(f"📢 Alerta do TradingView:\n\n{alert_message}")
+        if dados and 'moeda' in dados:
+            moeda = dados['moeda']
+            evento = dados.get('evento', 'não especificado')
+            mensagem = f"Alerta do TradingView: Moeda = {moeda}, Evento = {evento}"
+        else:
+            mensagem = f"Alerta recebido, mas sem dados definidos. Debug: {raw_body or 'vazio'}"
 
-        return jsonify({"status": "ok", "message": "Enviado ao Telegram"}), 200
+        enviar_mensagem_de_telegram(mensagem)
+        return jsonify({"status": "OK", "mensagem": "Enviado ao Telegram"}), 200
     except Exception as e:
-        print("❌ Erro no webhook:", e)
-        return jsonify({"status": "error", "message": str(e)}), 500
+        print(f"Erro no webhook: {e}")
+        return jsonify({"status": "error", "mensagem": str(e)}), 500
 
-# ▶️ Rodar servidor
-if __name__ == "__main__":
+if name == "main":
     app.run(host="0.0.0.0", port=10000)

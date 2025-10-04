@@ -3,7 +3,7 @@ import json
 import requests
 from flask import Flask, request, jsonify
 
-app = Flask(name)
+app = Flask(__name__)
 
 # Pegando variáveis de ambiente do Render
 TOKEN_DE_TELEGRAM = os.getenv('TOKEN_DE_TELEGRAM')
@@ -52,3 +52,4 @@ def webhook():
 
 if name == "main":
     app.run(host="0.0.0.0", port=10000)
+

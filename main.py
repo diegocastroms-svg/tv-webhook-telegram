@@ -14,6 +14,17 @@ WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET")
 if not TELEGRAM_TOKEN or not CHAT_ID or not WEBHOOK_SECRET:
     raise RuntimeError("Erro: variáveis TELEGRAM_TOKEN, CHAT_ID ou WEBHOOK_SECRET não configuradas!")
 
+# ---- Util: converter 'LTCUSDT' -> 'LTC_USDT', 'BTCFDUSD' -> 'BTC_FDUSD', etc.
+QUOTES = ["USDT","USDC","FDUSD","BUSD","TUSD","DAI","TRY","BRL","EUR","BTC","ETH","BNB"]
+def to_binance_pair(symbol: str) -> str:
+    s = (symbol or "").upper().replace("-", "").replace("/", "")
+    for q in QUOTES:
+        if s.endswith(q) and len(s) > len(q):
+            base = s[:-len(q)]
+            return f"{base}_{q}"
+    # fallback: se não reconhecer, tenta inserir underscore antes dos 4 últimos
+    return f"{s[:-4]}_{s[-4:]}" if len(s) > 4 else s
+
 # --- Função para enviar mensagem ao Telegram ---
 def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -47,13 +58,16 @@ def webhook(secret):
         condition = data.get("condition", "—")
         time_alert = data.get("time", "—")
 
-        # Link direto universal (abre app se instalado)
-        binance_link = f"https://www.binance.com/en/trade/{symbol}_USDT?type=spot"
+        # Corrige o par para o formato exigido pela Binance (ex: BTC_USDT)
+        pair = to_binance_pair(symbol)
 
-        # Escapa underline para o Telegram Markdown não quebrar
+        # Link universal (HTTPS) - abre o app se instalado, senão abre a web.
+        binance_link = f"https://www.binance.com/en/trade/{pair}?type=spot"
+
+        # Escapa underscore no símbolo para não quebrar o Markdown do Telegram
         safe_symbol = symbol.replace("_", "\\_")
 
-        # Monta mensagem formatada com o link seguro
+        # Mensagem formatada com link
         message = (
             f"🔔 ALERTA\n"
             f"Ativo: {safe_symbol}\n"
@@ -65,7 +79,7 @@ def webhook(secret):
         )
 
         send_telegram_message(message)
-        print(f"[OK] Alerta enviado: {symbol}")
+        print(f"[OK] Alerta enviado: {symbol} -> {pair}")
 
         return jsonify({"status": "ok"}), 200
 

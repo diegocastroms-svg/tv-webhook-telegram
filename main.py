@@ -20,7 +20,7 @@ def send_telegram_message(message):
     payload = {
         "chat_id": CHAT_ID,
         "text": message,
-        "parse_mode": "Markdown"  # Permite link clicável
+        "parse_mode": "MarkdownV2"  # Suporte a caracteres especiais e link app
     }
     try:
         response = requests.post(url, json=payload)
@@ -47,11 +47,10 @@ def webhook(secret):
         condition = data.get("condition", "—")
         time_alert = data.get("time", "—")
 
-        # Gera os links automáticos (web + app)
-        binance_link = f"https://www.binance.com/en/trade/{symbol}_USDT?type=spot"
+        # Link direto pro app da Binance
         binance_app_link = f"binance://trade/{symbol}_USDT"
 
-        # Monta mensagem formatada com os dois links
+        # Monta mensagem formatada (apenas link do app)
         message = (
             f"🔔 ALERTA\n"
             f"Ativo: {symbol}\n"
@@ -59,8 +58,7 @@ def webhook(secret):
             f"Preço: {price}\n"
             f"Volume: {volume}\n"
             f"Hora: {time_alert}\n\n"
-            f"🌐 [Abrir na Binance Web]({binance_link})\n"
-            f"📱 [Abrir no App da Binance]({binance_app_link})"
+            f"📱 *[Abrir no App da Binance]*({binance_app_link})"
         )
 
         send_telegram_message(message)
@@ -75,3 +73,5 @@ def webhook(secret):
 # --- Inicialização ---
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
+
+

@@ -17,7 +17,7 @@ if not TELEGRAM_TOKEN or not CHAT_ID or not WEBHOOK_SECRET:
 # --- Função para enviar mensagem ao Telegram ---
 def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": CHAT_ID, "text": message}  # sem parse_mode pra evitar erro 400
+    payload = {"chat_id": CHAT_ID, "text": message}
     try:
         response = requests.post(url, json=payload)
         response.raise_for_status()
@@ -25,6 +25,16 @@ def send_telegram_message(message):
         print("[OK] Mensagem enviada ao Telegram")
     except Exception as e:
         print(f"Erro ao enviar mensagem: {e}")
+
+# --- Função auxiliar para formatar o par corretamente ---
+QUOTES = ["USDT","USDC","FDUSD","BUSD","TUSD","DAI","TRY","BRL","EUR","BTC","ETH","BNB"]
+def to_binance_pair(symbol: str) -> str:
+    s = (symbol or "").upper().replace("-", "").replace("/", "")
+    for q in QUOTES:
+        if s.endswith(q) and len(s) > len(q):
+            base = s[:-len(q)]
+            return f"{base}_{q}"
+    return f"{s[:-4]}_{s[-4:]}" if len(s) > 4 else s
 
 # --- Rota principal para receber alertas do TradingView ---
 @app.route('/webhook/<secret>', methods=['POST'])
@@ -43,10 +53,9 @@ def webhook(secret):
         condition = data.get("condition", "—")
         time_alert = data.get("time", "—")
 
-        # Cria link que abre direto o app Binance (Android)
-        link = f"https://{request.host}/open/{symbol}"
+        pair = to_binance_pair(symbol)
+        link = f"https://www.binance.com/en/trade/{pair}?type=spot"
 
-        # Monta mensagem simples e segura
         message = (
             f"🔔 ALERTA\n"
             f"Ativo: {symbol}\n"
@@ -54,7 +63,7 @@ def webhook(secret):
             f"Preço: {price}\n"
             f"Volume: {volume}\n"
             f"Hora: {time_alert}\n\n"
-            f"📲 Abrir na Binance: {link}"
+            f"📊 Abrir gráfico: {link}"
         )
 
         send_telegram_message(message)
@@ -66,17 +75,11 @@ def webhook(secret):
         print(f"Erro ao processar alerta: {e}")
         return jsonify({"status": "erro"}), 500
 
-# --- Nova rota para abrir diretamente o app Binance ---
+# --- Rota de fallback (se alguém acessar /open/<symbol>) ---
 @app.route('/open/<symbol>')
-def open_in_app(symbol):
-    try:
-        # Força abertura do app Binance no Android
-        intent_link = f"intent://trade/{symbol}#Intent;scheme=binance;package=com.binance.dev;end"
-        return redirect(intent_link, code=302)
-    except Exception as e:
-        print(f"Erro no redirecionamento: {e}")
-        # fallback: se não abrir o app, abre a página web da Binance
-        return redirect(f"https://www.binance.com/en/trade/{symbol}?type=spot", code=302)
+def open_in_web(symbol):
+    pair = to_binance_pair(symbol)
+    return redirect(f"https://www.binance.com/en/trade/{pair}?type=spot", code=302)
 
 # --- Inicialização ---
 if __name__ == '__main__':

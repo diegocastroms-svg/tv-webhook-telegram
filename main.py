@@ -1,7 +1,7 @@
 import os
 import time
 import requests
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, redirect
 
 app = Flask(__name__)
 
@@ -14,25 +14,10 @@ WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET")
 if not TELEGRAM_TOKEN or not CHAT_ID or not WEBHOOK_SECRET:
     raise RuntimeError("Erro: variáveis TELEGRAM_TOKEN, CHAT_ID ou WEBHOOK_SECRET não configuradas!")
 
-# ---- Util: converter 'LTCUSDT' -> 'LTC_USDT', 'BTCFDUSD' -> 'BTC_FDUSD', etc.
-QUOTES = ["USDT","USDC","FDUSD","BUSD","TUSD","DAI","TRY","BRL","EUR","BTC","ETH","BNB"]
-def to_binance_pair(symbol: str) -> str:
-    s = (symbol or "").upper().replace("-", "").replace("/", "")
-    for q in QUOTES:
-        if s.endswith(q) and len(s) > len(q):
-            base = s[:-len(q)]
-            return f"{base}_{q}"
-    # fallback: se não reconhecer, tenta inserir underscore antes dos 4 últimos
-    return f"{s[:-4]}_{s[-4:]}" if len(s) > 4 else s
-
 # --- Função para enviar mensagem ao Telegram ---
 def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": CHAT_ID,
-        "text": message,
-        "parse_mode": "Markdown"  # modo seguro e compatível
-    }
+    payload = {"chat_id": CHAT_ID, "text": message, "parse_mode": "HTML"}
     try:
         response = requests.post(url, json=payload)
         response.raise_for_status()
@@ -58,34 +43,40 @@ def webhook(secret):
         condition = data.get("condition", "—")
         time_alert = data.get("time", "—")
 
-        # Corrige o par para o formato exigido pela Binance (ex: BTC_USDT)
-        pair = to_binance_pair(symbol)
+        # Cria link que abre direto no app Binance (Android)
+        link = f"https://{request.host}/open/{symbol}"
 
-        # Link universal (HTTPS) - abre o app se instalado, senão abre a web.
-        binance_link = f"https://www.binance.com/en/trade/{pair}?type=spot"
-
-        # Escapa underscore no símbolo para não quebrar o Markdown do Telegram
-        safe_symbol = symbol.replace("_", "\\_")
-
-        # Mensagem formatada com link
+        # Mensagem formatada
         message = (
-            f"🔔 ALERTA\n"
-            f"Ativo: {safe_symbol}\n"
-            f"Condição: {condition}\n"
-            f"Preço: {price}\n"
-            f"Volume: {volume}\n"
-            f"Hora: {time_alert}\n\n"
-            f"📱 [Abrir na Binance]({binance_link})"
+            f"🔔 <b>ALERTA</b>\n"
+            f"<b>Ativo:</b> {symbol}\n"
+            f"<b>Condição:</b> {condition}\n"
+            f"<b>Preço:</b> {price}\n"
+            f"<b>Volume:</b> {volume}\n"
+            f"<b>Hora:</b> {time_alert}\n\n"
+            f"📲 <a href='{link}'>Abrir na Binance</a>"
         )
 
         send_telegram_message(message)
-        print(f"[OK] Alerta enviado: {symbol} -> {pair}")
+        print(f"[OK] Alerta enviado: {symbol}")
 
         return jsonify({"status": "ok"}), 200
 
     except Exception as e:
         print(f"Erro ao processar alerta: {e}")
         return jsonify({"status": "erro"}), 500
+
+# --- Nova rota para abrir diretamente o app Binance ---
+@app.route('/open/<symbol>')
+def open_in_app(symbol):
+    try:
+        # Link Android (intent:// abre direto o app Binance)
+        intent_link = f"intent://trade/{symbol}#Intent;scheme=binance;package=com.binance.dev;end"
+        return redirect(intent_link, code=302)
+    except Exception as e:
+        print(f"Erro no redirecionamento: {e}")
+        # fallback: abre o site se não conseguir abrir o app
+        return redirect(f"https://www.binance.com/en/trade/{symbol}?type=spot", code=302)
 
 # --- Inicialização ---
 if __name__ == '__main__':

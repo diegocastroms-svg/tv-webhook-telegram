@@ -17,7 +17,11 @@ if not TELEGRAM_TOKEN or not CHAT_ID or not WEBHOOK_SECRET:
 # --- Função para enviar mensagem ao Telegram ---
 def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": CHAT_ID, "text": message}
+    payload = {
+        "chat_id": CHAT_ID,
+        "text": message,
+        "parse_mode": "Markdown"  # Permite link clicável
+    }
     try:
         response = requests.post(url, json=payload)
         response.raise_for_status()
@@ -43,14 +47,18 @@ def webhook(secret):
         condition = data.get("condition", "—")
         time_alert = data.get("time", "—")
 
-        # Monta mensagem formatada bonita
+        # Gera link automático da moeda na Binance
+        binance_link = f"https://www.binance.com/en/trade/{symbol}_USDT"
+
+        # Monta mensagem formatada bonita com link
         message = (
             f"🔔 ALERTA\n"
             f"Ativo: {symbol}\n"
             f"Condição: {condition}\n"
             f"Preço: {price}\n"
             f"Volume: {volume}\n"
-            f"Hora: {time_alert}"
+            f"Hora: {time_alert}\n\n"
+            f"👉 [Abrir na Binance]({binance_link})"
         )
 
         send_telegram_message(message)

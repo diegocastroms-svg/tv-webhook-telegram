@@ -10,7 +10,7 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET")
 
-# --- Verificação de segurança (evita rodar com config errada) ---
+# --- Verificação de segurança ---
 if not TELEGRAM_TOKEN or not CHAT_ID or not WEBHOOK_SECRET:
     raise RuntimeError("Erro: variáveis TELEGRAM_TOKEN, CHAT_ID ou WEBHOOK_SECRET não configuradas!")
 
@@ -18,11 +18,10 @@ if not TELEGRAM_TOKEN or not CHAT_ID or not WEBHOOK_SECRET:
 def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": CHAT_ID, "text": message}
-
     try:
         response = requests.post(url, json=payload)
         response.raise_for_status()
-        time.sleep(0.3)  # pequeno delay para evitar limite do Telegram
+        time.sleep(0.3)  # pequeno delay para evitar bloqueio por excesso de mensagens
     except Exception as e:
         print(f"Erro ao enviar mensagem: {e}")
 
@@ -32,14 +31,22 @@ def webhook(secret):
     if secret != WEBHOOK_SECRET:
         return jsonify({"status": "erro", "msg": "segredo inválido"}), 403
 
-    data = request.get_json()
+    data = request.get_json(force=True, silent=True)
     if not data:
         return jsonify({"status": "erro", "msg": "JSON inválido"}), 400
 
-    # Verifica se veio o campo 'message' do TradingView
-    message = data.get("message", "Alerta recebido do TradingView")
+    # --- Captura flexível da mensagem ---
+    if "message" in data:
+        message = data["message"]
+    elif "ticker" in data:
+        comment = ""
+        if "strategy" in data and isinstance(data["strategy"], dict):
+            comment = data["strategy"].get("order", {}).get("comment", "")
+        message = f"{data.get('ticker')} {comment}".strip()
+    else:
+        message = str(data)
 
-    # Envia para o Telegram
+    # --- Envia mensagem formatada ---
     send_telegram_message(f"📈 Alerta recebido:\n{message}")
 
     return jsonify({"status": "ok"}), 200

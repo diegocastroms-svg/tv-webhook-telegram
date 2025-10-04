@@ -1,299 +1,103 @@
-# main.py
 import os
 import json
-import math
-import requests
+import logging
 from flask import Flask, request, jsonify
+import requests
+
+# Configurações via variáveis de ambiente
+CHAT_ID = os.environ.get('CHAT_ID', '-4862798232')
+TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN', '8439338131:AAF_BH605VJ3Nnxo8VO3w1eiHBhoV3j6PtE')
+WEBHOOK_SECRET = os.environ.get('WEBHOOK_SECRET', '12345678')
+
+TELEGRAM_API = f'https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage'
 
 app = Flask(__name__)
+logging.basicConfig(level=logging.INFO)
 
-# ENV variables (defina no Render: TELEGRAM_TOKEN, CHAT_ID, WEBHOOK_SECRET)
-TELEGRAM_TOKEN = os.environ.get("8439338131:AAF_BH605VJ3Nnxo8VO3w1eiHBhoV3j6PtE")
-CHAT_ID = os.environ.get("-4862798232")
-WEBHOOK_SECRET = os.environ.get("12345678")  # ex: 12345678
 
-# debug: show if envs are missing (apenas print, evite expor token em logs públicos)
-print("ENV: TELEGRAM_TOKEN set?", bool(TELEGRAM_TOKEN))
-print("ENV: CHAT_ID set?", bool(CHAT_ID))
-print("ENV: WEBHOOK_SECRET set?", bool(WEBHOOK_SECRET))
+def verify_secret(req):
+    """Verifica o segredo vindo no header ou no campo JSON 'secret'"""
+    header_secret = req.headers.get('X-Webhook-Secret') or req.headers.get('X-Webhook-Token')
+    if header_secret:
+        return header_secret == WEBHOOK_SECRET
 
-# ---------- helpers para indicadores (simples, sem bibliotecas externas) ----------
-def sma(arr, period):
-    if len(arr) < period:
-        return sum(arr) / max(len(arr), 1)
-    return sum(arr[-period:]) / period
-
-def ema_series(values, period):
-    if not values:
-        return []
-    k = 2.0 / (period + 1.0)
-    ema = []
-    if len(values) >= period:
-        s = sum(values[:period]) / period
-        ema = [None] * (period - 1)
-        ema.append(s)
-        for v in values[period:]:
-            s = (v - s) * k + s
-            ema.append(s)
-    else:
-        s = values[0]
-        ema.append(s)
-        for v in values[1:]:
-            s = (v - s) * k + s
-            ema.append(s)
-    return ema
-
-def latest_ema(values, period):
-    em = ema_series(values, period)
-    return em[-1] if em else None
-
-def rsi_latest(closes, period=14):
-    if len(closes) < period + 1:
-        return None
-    gains = []
-    losses = []
-    for i in range(1, len(closes)):
-        delta = closes[i] - closes[i-1]
-        gains.append(delta if delta > 0 else 0.0)
-        losses.append(-delta if delta < 0 else 0.0)
-    avg_gain = sum(gains[:period]) / period
-    avg_loss = sum(losses[:period]) / period
-    if avg_loss == 0:
-        return 100.0
-    rs = avg_gain / avg_loss
-    rsi = 100 - (100 / (1 + rs))
-    for i in range(period, len(gains)):
-        gain = gains[i]
-        loss = losses[i]
-        avg_gain = (avg_gain * (period - 1) + gain) / period
-        avg_loss = (avg_loss * (period - 1) + loss) / period
-        if avg_loss == 0:
-            rsi = 100.0
-        else:
-            rs = avg_gain / avg_loss
-            rsi = 100 - (100 / (1 + rs))
-    return rsi
-
-def parabolic_sar(highs, lows, af_start=0.02, af_step=0.02, af_max=0.2):
-    n = len(highs)
-    if n == 0:
-        return [], []
-    sar = [0.0] * n
-    is_up = [True] * n
-    sar[0] = lows[0] - (highs[0] - lows[0])
-    up = True
-    ep = highs[0]
-    af = af_start
-    for i in range(1, n):
-        prev_sar = sar[i-1]
-        new_sar = prev_sar + af * (ep - prev_sar)
-        if up:
-            if new_sar > min(lows[i-1], lows[i-2] if i-2>=0 else lows[i-1]):
-                new_sar = min(lows[i-1], lows[i-2] if i-2>=0 else lows[i-1])
-        else:
-            if new_sar < max(highs[i-1], highs[i-2] if i-2>=0 else highs[i-1]):
-                new_sar = max(highs[i-1], highs[i-2] if i-2>=0 else highs[i-1])
-        if up:
-            if lows[i] < new_sar:
-                up = False
-                new_sar = ep
-                ep = lows[i]
-                af = af_start
-            else:
-                if highs[i] > ep:
-                    ep = highs[i]
-                    af = min(af + af_step, af_max)
-        else:
-            if highs[i] > new_sar:
-                up = True
-                new_sar = ep
-                ep = highs[i]
-                af = af_start
-            else:
-                if lows[i] < ep:
-                    ep = lows[i]
-                    af = min(af + af_step, af_max)
-        sar[i] = new_sar
-        is_up[i] = up
-    return sar, is_up
-
-# ---------- Binance public klines ----------
-def map_interval(tv_interval):
-    if not tv_interval:
-        return "3m"
-    s = str(tv_interval).lower()
-    if s.isdigit():
-        return s + "m"
-    if any(x in s for x in ['m','h','d','w','M']):
-        return s
-    return s + "m"
-
-def parse_ticker(tv_ticker):
-    if not tv_ticker:
-        return None, None
-    t = tv_ticker
-    if ":" in t:
-        t = t.split(":")[1]
-    t = t.replace("/", "").replace("-", "")
-    return "BINANCE", t.upper()
-
-def get_binance_klines(symbol, interval, limit=200):
-    url = "https://api.binance.com/api/v3/klines"
-    params = {"symbol": symbol, "interval": interval, "limit": limit}
-    r = requests.get(url, params=params, timeout=10)
-    if r.status_code != 200:
-        raise Exception(f"Binance klines error {r.status_code}: {r.text}")
-    data = r.json()
-    closes = [float(c[4]) for c in data]
-    opens  = [float(c[1]) for c in data]
-    highs  = [float(c[2]) for c in data]
-    lows   = [float(c[3]) for c in data]
-    vols   = [float(c[5]) for c in data]
-    return {"opens": opens, "closes": closes, "highs": highs, "lows": lows, "vols": vols}
-
-# ---------- logic to identify signal ----------
-def identify_signal_from_klines(klines, params):
-    closes = klines["closes"]
-    opens  = klines["opens"]
-    highs  = klines["highs"]
-    lows   = klines["lows"]
-    vols   = klines["vols"]
-
-    n = len(closes)
-    if n < max(30, params["srLen"] + 5):
-        return None, "NOT_ENOUGH_DATA"
-
-    emaFast = ema_series(closes, params["emaFastLen"])
-    emaSlow = ema_series(closes, params["emaSlowLen"])
-    if len(emaFast) < 2 or len(emaSlow) < 2:
-        return None, "NO_EMA"
-    emaFast_prev = emaFast[-2] if emaFast[-2] is not None else emaFast[-1]
-    emaFast_curr = emaFast[-1]
-    emaSlow_prev = emaSlow[-2] if emaSlow[-2] is not None else emaSlow[-1]
-    emaSlow_curr = emaSlow[-1]
-
-    rsi_val = rsi_latest(closes, params["rsiLen"])
-    sar_list, is_up_list = parabolic_sar(highs, lows)
-    sar_curr = sar_list[-1] if sar_list else None
-    volMA = sma(vols, params["volMALen"])
-    support = min(lows[-params["srLen"]:])
-    resistance = max(highs[-params["srLen"]:])
-    o = opens[-1]
-    c = closes[-1]
-    v = vols[-1]
-
-    bullCross = (emaFast_prev is not None and emaSlow_prev is not None and emaFast_prev < emaSlow_prev and emaFast_curr > emaSlow_curr)
-    bearCross = (emaFast_prev is not None and emaSlow_prev is not None and emaFast_prev > emaSlow_prev and emaFast_curr < emaSlow_curr)
-
-    buySignal = bullCross and (rsi_val is not None and rsi_val > params["rsiBuyLevel"]) and (v > volMA * params["volFactor"]) and (sar_curr is not None and c > sar_curr) and (c > support)
-    sellSignal = (c < support) and (rsi_val is not None and rsi_val < 45) and (c < sar_curr if sar_curr is not None else True) and (v > volMA)
-    pumpSignal = ((c - o) / (o if o!=0 else 1e-12) >= params["pumpPct"]) and (v > volMA * params["pumpVolMul"]) and (c > resistance)
-
-    if buySignal:
-        return "COMPRA", {"price": c, "rsi": rsi_val}
-    if pumpSignal:
-        return "PUMP", {"price": c, "volume": v}
-    if sellSignal:
-        return "VENDA", {"price": c, "rsi": rsi_val}
-    return "NONE", {}
-
-# ---------- send to telegram ----------
-def send_telegram(text):
-    if not TELEGRAM_TOKEN or not CHAT_ID:
-        print("TELEGRAM_TOKEN or CHAT_ID not configured")
-        return False
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown"}
     try:
-        r = requests.post(url, json=payload, timeout=10)
-        print("Telegram send status:", r.status_code, r.text)
-        return r.status_code == 200
-    except Exception as e:
-        print("Telegram send error:", e)
-        return False
-
-# ---------- webhook endpoint ----------
-@app.route("/", methods=["GET"])
-def index():
-    return "OK - Webhook ativo"
-
-@app.route("/webhook/<secret>", methods=["POST"])
-def webhook(secret):
-    print("Received webhook call, secret:", secret)
-    if not WEBHOOK_SECRET or secret != WEBHOOK_SECRET:
-        print("Invalid secret:", secret)
-        return jsonify({"error": "invalid secret"}), 403
-
-    data = None
-    try:
-        data = request.get_json(force=False, silent=True)
-        if data is None:
-            raw = request.data.decode("utf-8", errors="ignore")
-            data = json.loads(raw) if raw else {}
-    except Exception as e:
-        print("parse error:", e)
+        data = req.get_json(force=True, silent=True) or {}
+    except Exception:
         data = {}
 
-    print("Payload:", data)
+    payload_secret = data.get('secret')
+    if payload_secret:
+        return str(payload_secret) == str(WEBHOOK_SECRET)
 
-    tv_ticker = data.get("ticker") or data.get("symbol") or data.get("pair") or ""
-    interval_raw = data.get("interval") or "3m"
-    if not tv_ticker:
-        raw = request.data.decode("utf-8", errors="ignore")
-        if "ticker" in raw and ":" in raw:
-            try:
-                start = raw.index("ticker")
-                sub = raw[start: start+200]
-                import re
-                m = re.search(r'["\']?BINANCE[:/][A-Za-z0-9_/\-]+', sub)
-                if m:
-                    tv_ticker = m.group(0)
-            except:
-                pass
+    return False
 
-    exchange, symbol = parse_ticker(tv_ticker)
-    if not symbol:
-        send_telegram("⚠️ Webhook recebido sem ticker válido. Verifique a mensagem do alerta do TradingView.")
-        return jsonify({"error": "no ticker"}), 400
 
-    interval = map_interval(interval_raw)
+def build_telegram_text(payload: dict) -> str:
+    """Mensagem para o Telegram (HTML parse)"""
+    symbol = payload.get('symbol', payload.get('ticker', 'N/A'))
+    condition = payload.get('condition', payload.get('reason', 'trigger'))
+    price = payload.get('price', payload.get('close', 'N/A'))
+    vol = payload.get('volume', 'N/A')
+    time = payload.get('time', '')
 
-    params = {
-        "emaFastLen": 9,
-        "emaSlowLen": 21,
-        "rsiLen": 14,
-        "rsiBuyLevel": 55,
-        "volMALen": 20,
-        "volFactor": 2.0,
-        "pumpVolMul": 2.5,
-        "pumpPct": float(data.get("pump_pct", 0.20)),
-        "srLen": 20
+    text = (
+        f"<b>🔔 ALERTA</b>\n"
+        f"<b>Ativo:</b> {symbol}\n"
+        f"<b>Condição:</b> {condition}\n"
+        f"<b>Preço:</b> {price}\n"
+        f"<b>Volume:</b> {vol}\n"
+    )
+
+    if time:
+        text += f"<b>Hora:</b> {time}\n"
+
+    try:
+        raw = json.dumps(payload, ensure_ascii=False, indent=2)
+        text += f"\n<pre>{raw}</pre>"
+    except Exception:
+        pass
+
+    return text
+
+
+@app.route('/health', methods=['GET'])
+def health():
+    return jsonify({'up': True}), 200
+
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    if not verify_secret(request):
+        logging.warning('Webhook recebido com segredo inválido')
+        return jsonify({'error': 'invalid secret'}), 401
+
+    payload = request.get_json(force=True, silent=True)
+    if not payload:
+        logging.warning('Webhook sem JSON')
+        return jsonify({'error': 'invalid payload'}), 400
+
+    logging.info('Webhook recebido: %s', payload)
+
+    text = build_telegram_text(payload)
+
+    data = {
+        'chat_id': CHAT_ID,
+        'text': text,
+        'parse_mode': 'HTML',
+        'disable_web_page_preview': True,
     }
 
     try:
-        klines = get_binance_klines(symbol, interval, limit= max(100, params["srLen"]+20))
+        resp = requests.post(TELEGRAM_API, json=data, timeout=10)
+        resp.raise_for_status()
     except Exception as e:
-        txt = f"⚠️ Erro ao buscar candles Binance para {symbol}: {str(e)}"
-        print(txt)
-        send_telegram(txt)
-        return jsonify({"error": "klines_fail", "detail": str(e)}), 500
+        logging.exception('Erro ao enviar mensagem para Telegram: %s', e)
+        return jsonify({'error': 'failed to send telegram', 'details': str(e)}), 500
 
-    signal, info = identify_signal_from_klines(klines, params)
+    return jsonify({'ok': True}), 200
 
-    if signal == "NONE":
-        print(f"No clear signal for {symbol}")
-        return jsonify({"status": "no_signal"}), 200
 
-    if signal == "COMPRA":
-        msg = f"🟢 *COMPRA* (INÍCIO de alta)\nAtivo: {symbol}\nPreço: {info.get('price')}\nRSI: {info.get('rsi'):.1f}\nIntervalo: {interval}\nFonte: Binance"
-    elif signal == "PUMP":
-        msg = f"⚡ *PUMP DETECTADO*\nAtivo: {symbol}\nPreço: {info.get('price')}\nVolume (último candle): {info.get('volume')}\nIntervalo: {interval}\nFonte: Binance"
-    else:
-        msg = f"🔴 *VENDA* (perda de suporte)\nAtivo: {symbol}\nPreço: {info.get('price')}\nRSI: {info.get('rsi'):.1f}\nIntervalo: {interval}\nFonte: Binance"
-
-    send_telegram(msg)
-    return jsonify({"status":"ok","signal":signal}), 200
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)

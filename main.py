@@ -27,28 +27,6 @@ if not WEBHOOK_SECRET:
     logging.warning('WEBHOOK_SECRET não definido. O servidor aceitará requisições sem verificação (apenas para testes).')
 
 
-def verify_secret(req):
-    """Verifica o segredo vindo no header 'X-Webhook-Secret' ou no campo JSON 'secret'.
-       Se WEBHOOK_SECRET não estiver definido, retorna True (inseguro — só para testes)."""
-    if not WEBHOOK_SECRET:
-        return True
-
-    header_secret = req.headers.get('X-Webhook-Secret') or req.headers.get('X-Webhook-Token')
-    if header_secret:
-        return str(header_secret) == str(WEBHOOK_SECRET)
-
-    try:
-        data = req.get_json(force=True, silent=True) or {}
-    except Exception:
-        data = {}
-
-    payload_secret = data.get('secret')
-    if payload_secret:
-        return str(payload_secret) == str(WEBHOOK_SECRET)
-
-    return False
-
-
 def build_telegram_text(payload: dict) -> str:
     """Gera o texto que será enviado para o Telegram (HTML)."""
     symbol = payload.get('symbol', payload.get('ticker', 'N/A'))
@@ -82,7 +60,7 @@ def build_telegram_text(payload: dict) -> str:
 def index():
     return jsonify({
         'ok': True,
-        'message': 'Servidor ativo. Use POST /webhook para enviar alertas (veja README).'
+        'message': 'Servidor ativo. Use POST /webhook/<secret> para enviar alertas (veja README).'
     }), 200
 
 
@@ -91,20 +69,21 @@ def health():
     return jsonify({'up': True}), 200
 
 
-@app.route('/webhook', methods=['POST', 'GET'])
-def webhook():
+@app.route('/webhook/<secret>', methods=['POST', 'GET'])
+def webhook(secret):
+    # valida o segredo pela URL
+    if WEBHOOK_SECRET and secret != WEBHOOK_SECRET:
+        logging.warning(f'Segredo inválido recebido: {secret}')
+        return jsonify({'error': 'invalid secret'}), 401
+
     # GET -> útil para testar por navegador/ReqBin
     if request.method == 'GET':
         return jsonify({
             'ok': True,
-            'message': 'Endpoint /webhook: envie um POST JSON com {"secret": "...", "symbol":"..."}'
+            'message': 'Endpoint /webhook/<secret>: envie um POST JSON com {"symbol":"..."}'
         }), 200
 
     # POST -> processa o alerta
-    if not verify_secret(request):
-        logging.warning('Webhook recebido com segredo inválido')
-        return jsonify({'error': 'invalid secret'}), 401
-
     payload = request.get_json(force=True, silent=True)
     if not payload:
         logging.warning('Webhook sem JSON ou JSON inválido')

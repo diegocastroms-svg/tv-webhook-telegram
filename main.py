@@ -3,7 +3,7 @@ import json
 import requests
 from flask import Flask, request, jsonify
 
-app = Flask(name)
+app = Flask(__name__)
 
 # Configurações diretas com os valores fornecidos
 TOKEN_DE_TELEGRAM = "8439338131:AAF_BH605VJ3Nnxo8VO3w1eiHBhoV3j6PtE"  # Seu token do Telegram
@@ -44,3 +44,4 @@ def webhook():
 
 if name == "main":
     app.run(host="0.0.0.0", port=10000)
+

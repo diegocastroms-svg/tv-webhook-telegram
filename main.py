@@ -21,36 +21,47 @@ def send_telegram_message(message):
     try:
         response = requests.post(url, json=payload)
         response.raise_for_status()
-        time.sleep(0.3)  # pequeno delay para evitar bloqueio por excesso de mensagens
+        time.sleep(0.4)  # Delay leve para evitar limite do Telegram
     except Exception as e:
         print(f"Erro ao enviar mensagem: {e}")
 
-# --- Endpoint principal para receber alertas do TradingView ---
+# --- Rota principal para receber alertas do TradingView ---
 @app.route('/webhook/<secret>', methods=['POST'])
 def webhook(secret):
     if secret != WEBHOOK_SECRET:
         return jsonify({"status": "erro", "msg": "segredo inválido"}), 403
 
-    data = request.get_json(force=True, silent=True)
+    data = request.get_json()
     if not data:
         return jsonify({"status": "erro", "msg": "JSON inválido"}), 400
 
-    # --- Captura flexível da mensagem ---
-    if "message" in data:
-        message = data["message"]
-    elif "ticker" in data:
-        comment = ""
-        if "strategy" in data and isinstance(data["strategy"], dict):
-            comment = data["strategy"].get("order", {}).get("comment", "")
-        message = f"{data.get('ticker')} {comment}".strip()
-    else:
-        message = str(data)
+    try:
+        # Captura os dados enviados pelo TradingView
+        symbol = data.get("symbol", "—")
+        price = data.get("price", "—")
+        volume = data.get("volume", "—")
+        condition = data.get("condition", "—")
+        time_alert = data.get("time", "—")
 
-    # --- Envia mensagem formatada ---
-    send_telegram_message(f"📈 Alerta recebido:\n{message}")
+        # Monta mensagem formatada bonita
+        message = (
+            f"🔔 ALERTA\n"
+            f"Ativo: {symbol}\n"
+            f"Condição: {condition}\n"
+            f"Preço: {price}\n"
+            f"Volume: {volume}\n"
+            f"Hora: {time_alert}"
+        )
 
-    return jsonify({"status": "ok"}), 200
+        send_telegram_message(message)
+        print(f"[OK] Alerta enviado: {symbol}")
 
-# --- Inicialização padrão ---
+        return jsonify({"status": "ok"}), 200
+
+    except Exception as e:
+        print(f"Erro ao processar alerta: {e}")
+        return jsonify({"status": "erro"}), 500
+
+# --- Inicialização ---
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)

@@ -278,17 +278,19 @@ async def scan_symbol(session, symbol):
     except:
         return
 
+
 # ---------------- MAIN LOOP ----------------
 async def main_loop():
     async with aiohttp.ClientSession() as session:
+        print("BOT DUALSETUP INICIADO ✅", flush=True)
         symbols = await get_top_usdt_symbols(session)
         await tg(session, f"✅ Scanner ativo (DualSetup) | {len(symbols)} pares | {now_br()}")
-        if not symbols: return
+        if not symbols: 
+            return
         while True:
             tasks = [scan_symbol(session, s) for s in symbols]
             await asyncio.gather(*tasks)
             await asyncio.sleep(10)
-
 # ---------------- RUN ----------------
 def start_bot():
     while True:
@@ -299,4 +301,5 @@ def start_bot():
 
 threading.Thread(target=start_bot, daemon=True).start()
 app.run(host="0.0.0.0", port=int(os.getenv("PORT", 10001)))
+
 

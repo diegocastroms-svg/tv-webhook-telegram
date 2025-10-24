@@ -1,10 +1,10 @@
 # main_dualsetup_v1.py
 # ✅ Estrutura original preservada (Flask + thread + asyncio.run + utils)
-# ✅ Dois setups inseridos apenas dentro de scan_symbol():
+# ✅ Dois setups dentro de scan_symbol():
 #    - 🟩 SWING CURTO (1–3 dias) → TF: 1h/4h/1D, cooldown 20 min
 #    - 🔥 SMALL CAP EXPLOSIVA (10%+) → TF: 15m/1h, cooldown 10 min
-# ✅ Ajustado para detectar início de tendência (alta de dias)
-# ✅ Envia alerta Telegram automático após deploy
+# ✅ Ajustado para capturar tendências reais de alta (2–5 dias)
+# ✅ Envia alerta Telegram no início do deploy (garantido)
 
 import os, asyncio, aiohttp, time, math, statistics
 from datetime import datetime
@@ -148,29 +148,24 @@ def allowed(symbol, kind):
 def mark(symbol, kind):
     LAST_HIT[(symbol, kind)] = time.time()
 
-# ---------------- CORE CHECKS ----------------
-# (monitoramentos antigos removidos — apenas setups novos em scan_symbol)
-
 # ---------------- WORKER ----------------
 async def scan_symbol(session, symbol):
     try:
-        COOLDOWN_SWING = 20 * 60  # 20 min
-        COOLDOWN_SMALL = 10 * 60  # 10 min
+        COOLDOWN_SWING = 20 * 60
+        COOLDOWN_SMALL = 10 * 60
         def can_fire(kind: str, cd_sec: int) -> bool:
             ts = LAST_HIT.get((symbol, kind), 0.0)
             return (time.time() - ts) >= cd_sec
         def mark_fire(kind: str):
             LAST_HIT[(symbol, kind)] = time.time()
 
-        # FETCH DE KLINES
         k15 = await get_klines(session, symbol, "15m", limit=210)
-        k1h = await get_klines(session, symbol, "1h",  limit=210)
-        k4h = await get_klines(session, symbol, "4h",  limit=210)
-        k1d = await get_klines(session, symbol, "1d",  limit=210)
+        k1h = await get_klines(session, symbol, "1h", limit=210)
+        k4h = await get_klines(session, symbol, "4h", limit=210)
+        k1d = await get_klines(session, symbol, "1d", limit=210)
         if not (len(k15)>=50 and len(k1h)>=50 and len(k4h)>=50 and len(k1d)>=50):
             return
 
-        # 15m
         c15 = [float(k[4]) for k in k15]
         v15 = [float(k[5]) for k in k15]
         ema9_15  = ema(c15, 9)
@@ -183,7 +178,6 @@ async def scan_symbol(session, symbol):
         bbw15_prev = (upper15[-2] - lower15[-2]) / (mid15[-2] + 1e-12) if mid15[-2] else bbw15
         bb_expand_15 = bbw15 > bbw15_prev
 
-        # 1h
         c1h = [float(k[4]) for k in k1h]
         v1h = [float(k[5]) for k in k1h]
         ema9_1h  = ema(c1h, 9)
@@ -198,17 +192,13 @@ async def scan_symbol(session, symbol):
         bbw1h_prev = (upper1h[-2] - lower1h[-2]) / (mid1h[-2] + 1e-12) if mid1h[-2] else bbw1h
         bb_expand_1h = bbw1h > bbw1h_prev
 
-        # 4h
         c4h = [float(k[4]) for k in k4h]
         ema9_4h  = ema(c4h, 9)
         ema20_4h = sma(c4h, 20)
-        rsi4h = calc_rsi(c4h, 14)
 
-        # 1D
         c1d = [float(k[4]) for k in k1d]
         ema20_1d = sma(c1d, 20)
 
-        # 🔥 SMALL CAP EXPLOSIVA
         i15 = len(c15) - 1
         i1h = len(c1h) - 1
         small_ok = (
@@ -220,22 +210,19 @@ async def scan_symbol(session, symbol):
         )
         if small_ok and can_fire("SMALL_ALERT", COOLDOWN_SMALL):
             price = fmt_price(c15[i15])
-            rsi_v  = rsi15[-1]
-            volp   = (vol_ratio_15 - 1.0) * 100.0
             msg = (
                 f"🚨 <b>[EXPLOSÃO SUSTENTÁVEL DETECTADA]</b>\n"
                 f"💥 {symbol}\n"
                 f"🕒 {now_br()}\n"
                 f"💰 Preço: {price}\n"
-                f"📊 Volume: {volp:.0f}% acima da média 💣\n"
-                f"📈 RSI(15m): {rsi_v:.1f} | EMA9>EMA20 ✅ | BB expandindo ✅\n"
+                f"📊 Volume: {(vol_ratio_15-1)*100:.0f}% acima da média 💣\n"
+                f"📈 RSI(15m): {rsi15[-1]:.1f} | EMA9>EMA20 ✅ | BB expandindo ✅\n"
                 f"⏱️ Confirmação 1h: Preço > EMA20 ✅\n"
                 f"🔗 https://www.binance.com/en/trade/{symbol}"
             )
             await tg(session, msg)
             mark_fire("SMALL_ALERT")
 
-        # 🟩 SWING CURTO (1–3 dias)
         i1 = len(c1h) - 1
         trend_up_1h = ema9_1h[-1] > ema20_1h[-1] and ema20_1h[-1] > ma50_1h[-1]
         swing_ok = (
@@ -264,16 +251,16 @@ async def scan_symbol(session, symbol):
     except:
         return
 
-
 # ---------------- MAIN LOOP ----------------
 async def main_loop():
     async with aiohttp.ClientSession() as session:
         print("BOT DUALSETUP INICIADO ✅", flush=True)
+        await tg(session, f"✅ BOT DUALSETUP INICIADO COM SUCESSO 🚀\n🕒 {now_br()}\n🔁 Carregando pares da Binance...")
         symbols = await get_top_usdt_symbols(session)
         if not symbols:
             await tg(session, f"⚠️ Nenhum par encontrado na Binance | {now_br()}")
             return
-        await tg(session, f"✅ BOT DUALSETUP INICIADO COM SUCESSO 🚀\n🔍 Monitorando {len(symbols)} pares USDT\n🕒 {now_br()}")
+        await tg(session, f"🔍 Monitorando {len(symbols)} pares USDT\n✅ Scanner DualSetup ativo e operando 🇧🇷")
         while True:
             tasks = [scan_symbol(session, s) for s in symbols]
             await asyncio.gather(*tasks)

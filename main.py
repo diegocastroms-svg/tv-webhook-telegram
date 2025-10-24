@@ -3,7 +3,8 @@
 # ✅ Dois setups inseridos apenas dentro de scan_symbol():
 #    - 🟩 SWING CURTO (1–3 dias) → TF: 1h/4h/1D, cooldown 20 min
 #    - 🔥 SMALL CAP EXPLOSIVA (10%+) → TF: 15m/1h, cooldown 10 min
-# ✅ Alertas totalmente diferentes dos antigos (fáceis de distinguir)
+# ✅ Ajustado para detectar início de tendência (alta de dias)
+# ✅ Envia alerta Telegram automático após deploy
 
 import os, asyncio, aiohttp, time, math, statistics
 from datetime import datetime
@@ -153,7 +154,6 @@ def mark(symbol, kind):
 # ---------------- WORKER ----------------
 async def scan_symbol(session, symbol):
     try:
-        # ---------------- COOLDOWNS ESPECÍFICOS (sem alterar estrutura global)
         COOLDOWN_SWING = 20 * 60  # 20 min
         COOLDOWN_SMALL = 10 * 60  # 10 min
         def can_fire(kind: str, cd_sec: int) -> bool:
@@ -162,33 +162,28 @@ async def scan_symbol(session, symbol):
         def mark_fire(kind: str):
             LAST_HIT[(symbol, kind)] = time.time()
 
-        # ---------------- FETCH DE KLINES
-        # Small Cap: 15m e 1h
+        # FETCH DE KLINES
         k15 = await get_klines(session, symbol, "15m", limit=210)
         k1h = await get_klines(session, symbol, "1h",  limit=210)
-        # Swing: 4h e 1D
         k4h = await get_klines(session, symbol, "4h",  limit=210)
         k1d = await get_klines(session, symbol, "1d",  limit=210)
-
-        # Se faltar dados, aborta cedo (mantém estabilidade)
         if not (len(k15)>=50 and len(k1h)>=50 and len(k4h)>=50 and len(k1d)>=50):
             return
 
-        # ---------------- ARRAYS 15m
+        # 15m
         c15 = [float(k[4]) for k in k15]
         v15 = [float(k[5]) for k in k15]
         ema9_15  = ema(c15, 9)
         ema20_15 = sma(c15, 20)
         upper15, mid15, lower15 = bollinger_bands(c15, 20, 2)
         rsi15 = calc_rsi(c15, 14)
-        # métricas 15m
         vol_ma20_15 = sum(v15[-20:]) / 20.0 if len(v15) >= 20 else 0.0
         vol_ratio_15 = (v15[-1] / (vol_ma20_15 + 1e-12)) if vol_ma20_15 else 0.0
         bbw15 = (upper15[-1] - lower15[-1]) / (mid15[-1] + 1e-12) if mid15[-1] else 0.0
         bbw15_prev = (upper15[-2] - lower15[-2]) / (mid15[-2] + 1e-12) if mid15[-2] else bbw15
         bb_expand_15 = bbw15 > bbw15_prev
 
-        # ---------------- ARRAYS 1h
+        # 1h
         c1h = [float(k[4]) for k in k1h]
         v1h = [float(k[5]) for k in k1h]
         ema9_1h  = ema(c1h, 9)
@@ -203,27 +198,23 @@ async def scan_symbol(session, symbol):
         bbw1h_prev = (upper1h[-2] - lower1h[-2]) / (mid1h[-2] + 1e-12) if mid1h[-2] else bbw1h
         bb_expand_1h = bbw1h > bbw1h_prev
 
-        # ---------------- ARRAYS 4h
+        # 4h
         c4h = [float(k[4]) for k in k4h]
         ema9_4h  = ema(c4h, 9)
         ema20_4h = sma(c4h, 20)
-        ma50_4h  = sma(c4h, 50)
-        ma200_4h = sma(c4h, 200)
         rsi4h = calc_rsi(c4h, 14)
 
-        # ---------------- ARRAYS 1D
+        # 1D
         c1d = [float(k[4]) for k in k1d]
         ema20_1d = sma(c1d, 20)
 
-        # ---------------- SETUP 🔥 SMALL CAP EXPLOSIVA (15m/1h)
-        # Condições (15m): Volume > 2x média20, EMA9>EMA20, RSI 60–75, Bollinger expandindo
-        # Confirmação (1h): preço acima da EMA20_1h
+        # 🔥 SMALL CAP EXPLOSIVA
         i15 = len(c15) - 1
         i1h = len(c1h) - 1
         small_ok = (
-            vol_ratio_15 >= 2.0 and
+            vol_ratio_15 >= 1.5 and
             ema9_15[i15] > ema20_15[i15] and
-            60.0 <= rsi15[-1] <= 75.0 and
+            60.0 <= rsi15[-1] <= 80.0 and
             bb_expand_15 and
             c1h[i1h] > ema20_1h[i1h]
         )
@@ -244,20 +235,15 @@ async def scan_symbol(session, symbol):
             await tg(session, msg)
             mark_fire("SMALL_ALERT")
 
-        # ---------------- SETUP 🟩 SWING CURTO (1–3 dias) (1h/4h/1D)
-        # Entrada 1h: EMA9 cruza acima EMA20 recentemente, RSI>55, volume > média, BB abrindo
-        # Confirmação 4h: EMA9>EMA20, MA50>MA200
-        # Direção 1D: close > EMA20_1D
+        # 🟩 SWING CURTO (1–3 dias)
         i1 = len(c1h) - 1
-        i0 = i1 - 1
-        cross_9_20_1h = ema9_1h[i0] <= ema20_1h[i0] and ema9_1h[i1] > ema20_1h[i1]
+        trend_up_1h = ema9_1h[-1] > ema20_1h[-1] and ema20_1h[-1] > ma50_1h[-1]
         swing_ok = (
-            cross_9_20_1h and
+            trend_up_1h and
             rsi1h[-1] > 55.0 and
             vol_ratio_1h >= 1.2 and
             bb_expand_1h and
             ema9_4h[-1] > ema20_4h[-1] and
-            ma50_4h[-1] > ma200_4h[-1] and
             c1d[-1] > ema20_1d[-1]
         )
         if swing_ok and can_fire("SWING_ALERT", COOLDOWN_SWING):
@@ -267,7 +253,7 @@ async def scan_symbol(session, symbol):
                 f"📊 {symbol}\n"
                 f"🕒 {now_br()}\n"
                 f"💰 Preço: {price}\n"
-                f"📈 EMA9>EMA20>MA50>MA200 (4h) ✅\n"
+                f"📈 EMA9>EMA20>MA50 (1h) ✅ | EMA9>EMA20 (4h) ✅\n"
                 f"⚡ RSI(1h): {rsi1h[-1]:.1f} | Volume: {(vol_ratio_1h-1)*100:.0f}% acima | BB abrindo ✅\n"
                 f"🧭 Direção 1D: Close > EMA20 ✅\n"
                 f"🔗 https://www.binance.com/en/trade/{symbol}"
@@ -284,13 +270,15 @@ async def main_loop():
     async with aiohttp.ClientSession() as session:
         print("BOT DUALSETUP INICIADO ✅", flush=True)
         symbols = await get_top_usdt_symbols(session)
-        await tg(session, f"✅ Scanner ativo (DualSetup) | {len(symbols)} pares | {now_br()}")
-        if not symbols: 
+        if not symbols:
+            await tg(session, f"⚠️ Nenhum par encontrado na Binance | {now_br()}")
             return
+        await tg(session, f"✅ BOT DUALSETUP INICIADO COM SUCESSO 🚀\n🔍 Monitorando {len(symbols)} pares USDT\n🕒 {now_br()}")
         while True:
             tasks = [scan_symbol(session, s) for s in symbols]
             await asyncio.gather(*tasks)
             await asyncio.sleep(10)
+
 # ---------------- RUN ----------------
 def start_bot():
     while True:
@@ -301,5 +289,3 @@ def start_bot():
 
 threading.Thread(target=start_bot, daemon=True).start()
 app.run(host="0.0.0.0", port=int(os.getenv("PORT", 10001)))
-
-

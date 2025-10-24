@@ -1,10 +1,9 @@
 # main_dualsetup_v1.py
 # ✅ Estrutura original preservada (Flask + thread + asyncio.run + utils)
-# ✅ Dois setups dentro de scan_symbol():
-#    - 🟩 SWING CURTO (1–3 dias) → TF: 1h/4h/1D, cooldown 20 min
-#    - 🔥 SMALL CAP EXPLOSIVA (10%+) → TF: 15m/1h, cooldown 10 min
-# ✅ Ajustado para capturar tendências reais de alta (2–5 dias)
-# ✅ Envia alerta Telegram no início do deploy (garantido)
+# ✅ Dois setups: SWING CURTO (1–3 dias) e SMALL CAP EXPLOSIVA (10%+)
+# ✅ Ajustado para capturar tendências reais (2–5 dias)
+# ✅ Envia alerta Telegram no início do deploy
+# ✅ Loop protegido (sem reiniciar repetidamente)
 
 import os, asyncio, aiohttp, time, math, statistics
 from datetime import datetime
@@ -44,9 +43,6 @@ async def tg(session, text: str):
 def fmt_price(x: float) -> str:
     s = f"{x:.8f}".rstrip("0").rstrip(".")
     return s if s else "0"
-
-def cross_up(a_prev, a_now, b_prev, b_now) -> bool:
-    return a_prev <= b_prev and a_now > b_now
 
 def sma(seq, n):
     out, s = [], 0.0
@@ -141,13 +137,6 @@ async def get_top_usdt_symbols(session):
 # ---------------- ALERT STATE ----------------
 LAST_HIT = {}
 
-def allowed(symbol, kind):
-    ts = LAST_HIT.get((symbol, kind), 0.0)
-    return (time.time() - ts) >= COOLDOWN_SEC
-
-def mark(symbol, kind):
-    LAST_HIT[(symbol, kind)] = time.time()
-
 # ---------------- WORKER ----------------
 async def scan_symbol(session, symbol):
     try:
@@ -199,6 +188,7 @@ async def scan_symbol(session, symbol):
         c1d = [float(k[4]) for k in k1d]
         ema20_1d = sma(c1d, 20)
 
+        # 🔥 SMALL CAP EXPLOSIVA
         i15 = len(c15) - 1
         i1h = len(c1h) - 1
         small_ok = (
@@ -223,6 +213,7 @@ async def scan_symbol(session, symbol):
             await tg(session, msg)
             mark_fire("SMALL_ALERT")
 
+        # 🟩 SWING CURTO
         i1 = len(c1h) - 1
         trend_up_1h = ema9_1h[-1] > ema20_1h[-1] and ema20_1h[-1] > ma50_1h[-1]
         swing_ok = (
@@ -262,9 +253,14 @@ async def main_loop():
             return
         await tg(session, f"🔍 Monitorando {len(symbols)} pares USDT\n✅ Scanner DualSetup ativo e operando 🇧🇷")
         while True:
-            tasks = [scan_symbol(session, s) for s in symbols]
-            await asyncio.gather(*tasks)
-            await asyncio.sleep(10)
+            try:
+                tasks = [scan_symbol(session, s) for s in symbols]
+                await asyncio.gather(*tasks)
+                await asyncio.sleep(10)
+            except Exception as e:
+                print(f"[ERRO CICLO] {e}", flush=True)
+                await asyncio.sleep(10)
+                continue
 
 # ---------------- RUN ----------------
 def start_bot():
@@ -276,5 +272,4 @@ def start_bot():
             time.sleep(30)
 
 threading.Thread(target=start_bot, daemon=True).start()
-app.run(host="0.0.0.0", port=int(os.getenv("PORT", 10001)))
-
+app.run(host="0.0.0.0", port=int(os.getenv("PORT", 50000)))

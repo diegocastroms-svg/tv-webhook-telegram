@@ -271,8 +271,10 @@ def start_bot():
     while True:
         try:
             asyncio.run(main_loop())
-        except Exception:
-            time.sleep(5)
+        except Exception as e:
+            print(f"[ERRO LOOP] Reiniciando em 30s: {e}", flush=True)
+            time.sleep(30)
 
 threading.Thread(target=start_bot, daemon=True).start()
 app.run(host="0.0.0.0", port=int(os.getenv("PORT", 10001)))
+

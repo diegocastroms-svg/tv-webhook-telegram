@@ -2,9 +2,7 @@
 # ✅ Estrutura original preservada (Flask + thread + asyncio.run + utils)
 # ✅ /health único • Porta 50000 • use_reloader=False (estável no Render)
 # ✅ Mensagem única de inicialização no Telegram
-# ✅ Dois setups com faixas flexíveis:
-#    - 🔥 Small Cap Explosiva (15m/1h): RSI 55–80 | Volume 1.3–6.0× | BB abrindo c/tolerância
-#    - 🟩 Swing Curto (1h/4h/1D): RSI 45–60 | Volume 0.8–3.0× | cruzamento EMA9/20 (1h) + filtros 4h/1D c/tolerância
+# ✅ Dois setups com faixas flexíveis (corrigido conflito de nome da sessão aiohttp)
 
 import os, asyncio, aiohttp, time, statistics, threading
 from datetime import datetime
@@ -33,14 +31,14 @@ def health():
 def now_br():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S") + " 🇧🇷"
 
-async def tg(session, text: str):
+async def tg(aio, text: str):
     if not (TELEGRAM_TOKEN and CHAT_ID):
         print("⚠️ Variáveis TELEGRAM_TOKEN ou CHAT_ID não configuradas!", flush=True)
         return
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         payload = {"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}
-        await session.post(url, data=payload, timeout=REQ_TIMEOUT)
+        await aio.post(url, data=payload, timeout=REQ_TIMEOUT)
         print(f"📤 Mensagem enviada ao Telegram: {text[:60]}...", flush=True)
     except Exception as e:
         print(f"⚠️ Erro ao enviar mensagem Telegram: {e}", flush=True)
@@ -105,31 +103,39 @@ def calc_rsi(seq, period=14):
     return [50.0]*(len(seq)-len(rsi)) + rsi
 
 # ---------------- BINANCE ----------------
-async def get_klines(session, symbol, interval, limit=210):
+async def get_klines(aio, symbol, interval, limit=210):
     url = f"{BINANCE_HTTP}/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
     try:
-        async with session.get(url, timeout=REQ_TIMEOUT) as r:
+        async with aio.get(url, timeout=REQ_TIMEOUT) as r:
             data = await r.json()
             if isinstance(data, list):
                 return data
             return []
-    except:
+    except Exception as e:
+        print(f"⚠️ Erro get_klines({symbol}): {e}", flush=True)
         return []
 
-async def get_top_usdt_symbols(session):
+async def get_top_usdt_symbols(aio):
     url = f"{BINANCE_HTTP}/api/v3/ticker/24hr"
-    async with session.get(url, timeout=REQ_TIMEOUT) as r:
-        data = await r.json()
+    try:
+        async with aio.get(url, timeout=REQ_TIMEOUT) as r:
+            data = await r.json()
+    except Exception as e:
+        print(f"⚠️ Erro ao buscar pares: {e}", flush=True)
+        return []
+
     blocked = (
         "UP","DOWN","BULL","BEAR","BUSD","FDUSD","TUSD","USDC","USD1",
         "USDE","PERP","_PERP","EUR","EURS","CEUR","XUSD","USDX","GUSD"
     )
     pares = []
     for d in data:
-        s = d.get("symbol","")
+        if not isinstance(d, dict):
+            continue
+        s = d.get("symbol", "")
         if not s.endswith("USDT"): continue
         if any(x in s for x in blocked): continue
-        try: qv = float(d.get("quoteVolume","0") or 0.0)
+        try: qv = float(d.get("quoteVolume", "0") or 0.0)
         except: qv = 0.0
         pares.append((s, qv))
     pares.sort(key=lambda x: x[1], reverse=True)
@@ -143,8 +149,8 @@ def allowed(symbol, kind, cd_sec):
 def mark(symbol, kind):
     LAST_HIT[(symbol, kind)] = time.time()
 
-# ---------------- WORKER (2 setups com faixas flexíveis) ----------------
-async def scan_symbol(session, symbol):
+# ---------------- WORKER ----------------
+async def scan_symbol(aio, symbol):
     try:
         CD_SMALL = 8*60
         CD_SWING = 10*60
@@ -156,10 +162,10 @@ async def scan_symbol(session, symbol):
         TOL_BB = 0.98
         TOL_EMA = 0.99
 
-        k15 = await get_klines(session, symbol, "15m", 210)
-        k1h = await get_klines(session, symbol, "1h",  210)
-        k4h = await get_klines(session, symbol, "4h",  210)
-        k1d = await get_klines(session, symbol, "1d",  210)
+        k15 = await get_klines(aio, symbol, "15m", 210)
+        k1h = await get_klines(aio, symbol, "1h", 210)
+        k4h = await get_klines(aio, symbol, "4h", 210)
+        k1d = await get_klines(aio, symbol, "1d", 210)
         if not (len(k15)>=50 and len(k1h)>=50 and len(k4h)>=50 and len(k1d)>=50):
             return
 
@@ -210,7 +216,7 @@ async def scan_symbol(session, symbol):
                 f"⏱️ Confirmação 1h: Close ≥ EMA20 ✅\n"
                 f"🔗 https://www.binance.com/en/trade/{symbol}"
             )
-            await tg(session, msg)
+            await tg(aio, msg)
             mark(symbol, "SMALL_ALERT")
 
         cross_9_20_1h = (ema9_1h[-2] <= ema20_1h[-2]) and (ema9_1h[-1] > ema20_1h[-1])
@@ -235,7 +241,7 @@ async def scan_symbol(session, symbol):
                 f"🧭 Direção 1D: Close ≥ EMA20 ✅\n"
                 f"🔗 https://www.binance.com/en/trade/{symbol}"
             )
-            await tg(session, msg)
+            await tg(aio, msg)
             mark(symbol, "SWING_ALERT")
 
     except Exception as e:
@@ -245,16 +251,16 @@ async def scan_symbol(session, symbol):
 # ---------------- MAIN LOOP ----------------
 async def main_loop():
     print("🔍 Entrando em main_loop()", flush=True)
-    async with aiohttp.ClientSession() as session:
-        symbols = await get_top_usdt_symbols(session)
+    async with aiohttp.ClientSession() as aio:
+        symbols = await get_top_usdt_symbols(aio)
         print(f"✅ {len(symbols)} pares obtidos da Binance", flush=True)
-        await tg(session, f"✅ BOT DUALSETUP INICIADO COM SUCESSO 🚀 | {len(symbols)} pares | {now_br()}")
+        await tg(aio, f"✅ BOT DUALSETUP INICIADO COM SUCESSO 🚀 | {len(symbols)} pares | {now_br()}")
         if not symbols:
             print("⚠️ Nenhum par retornado da Binance!", flush=True)
             return
         while True:
             print(f"🔁 Nova varredura iniciada: {now_br()}", flush=True)
-            await asyncio.gather(*[scan_symbol(session, s) for s in symbols])
+            await asyncio.gather(*[scan_symbol(aio, s) for s in symbols])
             await asyncio.sleep(10)
 
 def start_bot():

@@ -1,17 +1,15 @@
-# main_dualsetup_v3.py
-# ✅ Estrutura original mantida
-# ✅ Porta 50000 fixa
-# ✅ Health check para Render
-# ✅ Alerta único de inicialização
-# ✅ DualSetup completo (Swing + SmallCap)
+# main_dualsetup_final.py
+# ✅ Estrutura original preservada (Flask + thread + asyncio.run + utils)
+# ✅ /health único, porta 50000 (ou PORT do ambiente), use_reloader=False
+# ✅ Mensagem única de inicialização no Telegram
 
-import os, asyncio, aiohttp, time, math, statistics, threading
+import os, asyncio, aiohttp, time, statistics
 from datetime import datetime
 from flask import Flask
+import threading
 
 # ---------------- CONFIG ----------------
 BINANCE_HTTP = "https://api.binance.com"
-COOLDOWN_SEC = 10 * 60
 TOP_N = 50
 REQ_TIMEOUT = 8
 
@@ -23,11 +21,11 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "✅ Scanner ativo (DualSetup) — Swing + SmallCap 🇧🇷", 200
+    return "✅ Scanner ativo (DualSetup) — Swing 1–3D + SmallCap 10% | 🇧🇷", 200
 
 @app.route("/health")
 def health():
-    return "ok", 200
+    return "OK", 200
 
 # ---------------- UTILS ----------------
 def now_br():
@@ -143,74 +141,130 @@ def allowed(symbol, kind, cd_sec):
 def mark(symbol, kind):
     LAST_HIT[(symbol, kind)] = time.time()
 
-# ---------------- SCANNER ----------------
+# ---------------- WORKER (dois setups) ----------------
 async def scan_symbol(session, symbol):
     try:
-        k15 = await get_klines(session, symbol, "15m")
-        k1h = await get_klines(session, symbol, "1h")
-        k4h = await get_klines(session, symbol, "4h")
-        k1d = await get_klines(session, symbol, "1d")
+        # cooldowns específicos
+        CD_SWING = 20 * 60   # 20 min
+        CD_SMALL = 10 * 60   # 10 min
 
-        if not (len(k15)>50 and len(k1h)>50 and len(k4h)>50 and len(k1d)>50):
+        # klines
+        k15 = await get_klines(session, symbol, "15m", limit=210)
+        k1h = await get_klines(session, symbol, "1h",  limit=210)
+        k4h = await get_klines(session, symbol, "4h",  limit=210)
+        k1d = await get_klines(session, symbol, "1d",  limit=210)
+        if not (len(k15)>=50 and len(k1h)>=50 and len(k4h)>=50 and len(k1d)>=50):
             return
 
-        c15 = [float(k[4]) for k in k15]
-        v15 = [float(k[5]) for k in k15]
-        ema9_15, ema20_15 = ema(c15,9), sma(c15,20)
-        upper15, mid15, lower15 = bollinger_bands(c15,20,2)
-        rsi15 = calc_rsi(c15)
-        vol_ma15 = sum(v15[-20:])/20
-        vol_ratio15 = v15[-1]/(vol_ma15+1e-12)
-        bbw15 = (upper15[-1]-lower15[-1])/(mid15[-1]+1e-12)
-        bbw15_prev = (upper15[-2]-lower15[-2])/(mid15[-2]+1e-12)
-        bb_expand15 = bbw15 > bbw15_prev
+        # ----- 15m
+        c15 = [float(k[4]) for k in k15]; v15 = [float(k[5]) for k in k15]
+        ema9_15  = ema(c15, 9)
+        ema20_15 = sma(c15, 20)
+        upper15, mid15, lower15 = bollinger_bands(c15, 20, 2)
+        rsi15 = calc_rsi(c15, 14)
+        vol_ma20_15 = sum(v15[-20:]) / 20.0
+        vol_ratio_15 = v15[-1] / (vol_ma20_15 + 1e-12)
+        bbw15 = (upper15[-1] - lower15[-1]) / (mid15[-1] + 1e-12)
+        bbw15_prev = (upper15[-2] - lower15[-2]) / (mid15[-2] + 1e-12)
+        bb_expand_15 = bbw15 > bbw15_prev
 
-        c1h = [float(k[4]) for k in k1h]
-        v1h = [float(k[5]) for k in k1h]
-        ema9_1h, ema20_1h, ma50_1h, ma200_1h = ema(c1h,9), sma(c1h,20), sma(c1h,50), sma(c1h,200)
-        upper1h, mid1h, lower1h = bollinger_bands(c1h,20,2)
-        rsi1h = calc_rsi(c1h)
-        vol_ma1h = sum(v1h[-20:])/20
-        vol_ratio1h = v1h[-1]/(vol_ma1h+1e-12)
+        # ----- 1h
+        c1h=[float(k[4]) for k in k1h]; v1h=[float(k[5]) for k in k1h]
+        ema9_1h=ema(c1h,9); ema20_1h=sma(c1h,20)
+        ma50_1h=sma(c1h,50); ma200_1h=sma(c1h,200)
+        upper1h, mid1h, lower1h = bollinger_bands(c1h, 20, 2)
+        rsi1h = calc_rsi(c1h, 14)
+        vol_ma20_1h = sum(v1h[-20:])/20.0
+        vol_ratio_1h = v1h[-1]/(vol_ma20_1h+1e-12)
         bbw1h = (upper1h[-1]-lower1h[-1])/(mid1h[-1]+1e-12)
         bbw1h_prev = (upper1h[-2]-lower1h[-2])/(mid1h[-2]+1e-12)
-        bb_expand1h = bbw1h > bbw1h_prev
+        bb_expand_1h = bbw1h > bbw1h_prev
 
-        c4h = [float(k[4]) for k in k4h]
-        ema9_4h, ema20_4h, ma50_4h, ma200_4h = ema(c4h,9), sma(c4h,20), sma(c4h,50), sma(c4h,200)
-        c1d = [float(k[4]) for k in k1d]
-        ema20_1d = sma(c1d,20)
+        # ----- 4h
+        c4h=[float(k[4]) for k in k4h]
+        ema9_4h=ema(c4h,9); ema20_4h=sma(c4h,20)
+        ma50_4h=sma(c4h,50); ma200_4h=sma(c4h,200)
 
-        # SMALL CAP 🔥
-        if (vol_ratio15>=1.8 and ema9_15[-1]>ema20_15[-1] and 55<=rsi15[-1]<=75 and bb_expand15 and c1h[-1]>ema20_1h[-1] and allowed(symbol,"SMALL",600)):
-            msg = (f"🚨 <b>[SMALL CAP EXPLOSIVA]</b>\n💥 {symbol}\n🕒 {now_br()}\n💰 Preço: {fmt_price(c15[-1])}\n"
-                   f"📈 RSI: {rsi15[-1]:.1f} | EMA9>EMA20 | BB expandindo ✅\n🔗 https://www.binance.com/en/trade/{symbol}")
-            await tg(session, msg); mark(symbol,"SMALL")
+        # ----- 1D
+        c1d=[float(k[4]) for k in k1d]
+        ema20_1d=sma(c1d,20)
 
-        # SWING 🟩
-        cross = ema9_1h[-2]<=ema20_1h[-2] and ema9_1h[-1]>ema20_1h[-1]
-        if (cross and rsi1h[-1]>50 and vol_ratio1h>=1.1 and bb_expand1h and ema9_4h[-1]>ema20_4h[-1]
-            and ma50_4h[-1]>ma200_4h[-1] and c1d[-1]>ema20_1d[-1] and allowed(symbol,"SWING",1200)):
-            msg = (f"💹 <b>[SWING CURTO – TENDÊNCIA]</b>\n📊 {symbol}\n🕒 {now_br()}\n💰 {fmt_price(c1h[-1])}\n"
-                   f"📈 RSI: {rsi1h[-1]:.1f} | BB abrindo | EMA9>EMA20>MA50>MA200 ✅\n🔗 https://www.binance.com/en/trade/{symbol}")
-            await tg(session, msg); mark(symbol,"SWING")
+        # ------------- SETUP 🔥 SMALL CAP EXPLOSIVA (15m/1h)
+        small_ok = (
+            vol_ratio_15 >= 2.0 and
+            ema9_15[-1] > ema20_15[-1] and
+            60.0 <= rsi15[-1] <= 75.0 and
+            bb_expand_15 and
+            c1h[-1] > ema20_1h[-1]
+        )
+        if small_ok and allowed(symbol, "SMALL_ALERT", CD_SMALL):
+            msg = (
+                f"🚨 <b>[EXPLOSÃO SUSTENTÁVEL DETECTADA]</b>\n"
+                f"💥 {symbol}\n"
+                f"🕒 {now_br()}\n"
+                f"💰 Preço: {fmt_price(c15[-1])}\n"
+                f"📊 Volume: {(vol_ratio_15-1)*100:.0f}% acima da média 💣\n"
+                f"📈 RSI(15m): {rsi15[-1]:.1f} | EMA9>EMA20 ✅ | BB expandindo ✅\n"
+                f"⏱️ Confirmação 1h: Preço > EMA20 ✅\n"
+                f"🔗 https://www.binance.com/en/trade/{symbol}"
+            )
+            await tg(session, msg)
+            mark(symbol, "SMALL_ALERT")
+
+        # ------------- SETUP 🟩 SWING CURTO (1–3 dias) (1h/4h/1D)
+        cross_9_20_1h = ema9_1h[-2] <= ema20_1h[-2] and ema9_1h[-1] > ema20_1h[-1]
+        swing_ok = (
+            cross_9_20_1h and
+            rsi1h[-1] > 55.0 and
+            vol_ratio_1h >= 1.2 and
+            bb_expand_1h and
+            ema9_4h[-1] > ema20_4h[-1] and
+            ma50_4h[-1] > ma200_4h[-1] and
+            c1d[-1] > ema20_1d[-1]
+        )
+        if swing_ok and allowed(symbol, "SWING_ALERT", CD_SWING := 20*60):
+            msg = (
+                f"💹 <b>[SWING CURTO – TENDÊNCIA SUSTENTADA]</b>\n"
+                f"📊 {symbol}\n"
+                f"🕒 {now_br()}\n"
+                f"💰 Preço: {fmt_price(c1h[-1])}\n"
+                f"📈 EMA9>EMA20>MA50>MA200 (4h) ✅\n"
+                f"⚡ RSI(1h): {rsi1h[-1]:.1f} | Volume: {(vol_ratio_1h-1)*100:.0f}% acima | BB abrindo ✅\n"
+                f"🧭 Direção 1D: Close > EMA20 ✅\n"
+                f"🔗 https://www.binance.com/en/trade/{symbol}"
+            )
+            await tg(session, msg)
+            mark(symbol, "SWING_ALERT")
+
     except:
         return
 
 # ---------------- MAIN LOOP ----------------
 async def main_loop():
     async with aiohttp.ClientSession() as session:
-        print("BOT DUALSETUP INICIADO ✅", flush=True)
         symbols = await get_top_usdt_symbols(session)
-        await tg(session, f"✅ BOT DUALSETUP INICIADO COM SUCESSO 🚀\n🕒 {now_br()}\n🔗 Carregando {len(symbols)} pares.")
+        await tg(session, f"✅ BOT DUALSETUP INICIADO COM SUCESSO 🚀 | {len(symbols)} pares | {now_br()}")
+        if not symbols:
+            return
         while True:
-            await asyncio.gather(*[scan_symbol(session, s) for s in symbols])
+            tasks = [scan_symbol(session, s) for s in symbols]
+            await asyncio.gather(*tasks)
             await asyncio.sleep(10)
 
 def start_bot():
     while True:
-        try: asyncio.run(main_loop())
-        except Exception: time.sleep(5)
+        try:
+            asyncio.run(main_loop())
+        except Exception:
+            time.sleep(5)
 
-threading.Thread(target=start_bot, daemon=True).start()
-app.run(host="0.0.0.0", port=50000)
+# ---------------- RUN ----------------
+if __name__ == "__main__":
+    # Inicia o bot alguns segundos DEPOIS do Flask subir -> evita reinicializações do Render
+    def start_after_ready():
+        time.sleep(3)
+        print("BOT DUALSETUP INICIADO ✅", flush=True)
+        start_bot()
+
+    threading.Thread(target=start_after_ready, daemon=True).start()
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 50000)), use_reloader=False)

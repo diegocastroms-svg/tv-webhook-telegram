@@ -35,13 +35,15 @@ def now_br():
 
 async def tg(session, text: str):
     if not (TELEGRAM_TOKEN and CHAT_ID):
+        print("⚠️ Variáveis TELEGRAM_TOKEN ou CHAT_ID não configuradas!", flush=True)
         return
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         payload = {"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}
         await session.post(url, data=payload, timeout=REQ_TIMEOUT)
-    except:
-        pass
+        print(f"📤 Mensagem enviada ao Telegram: {text[:60]}...", flush=True)
+    except Exception as e:
+        print(f"⚠️ Erro ao enviar mensagem Telegram: {e}", flush=True)
 
 def fmt_price(x: float) -> str:
     s = f"{x:.8f}".rstrip("0").rstrip(".")
@@ -144,19 +146,16 @@ def mark(symbol, kind):
 # ---------------- WORKER (2 setups com faixas flexíveis) ----------------
 async def scan_symbol(session, symbol):
     try:
-        # Cooldowns
-        CD_SMALL = 8*60     # 8 min
-        CD_SWING = 10*60    # 10 min
+        CD_SMALL = 8*60
+        CD_SWING = 10*60
 
-        # Tolerâncias / faixas
         RSI_SMALL_MIN, RSI_SMALL_MAX = 55.0, 80.0
         VOL_SMALL_MIN, VOL_SMALL_MAX = 1.3, 6.0
         RSI_SWING_MIN, RSI_SWING_MAX = 45.0, 60.0
         VOL_SWING_MIN, VOL_SWING_MAX = 0.8, 3.0
-        TOL_BB = 0.98        # 2% de tolerância p/ “BB abrindo”
-        TOL_EMA = 0.99       # 1% p/ cruzamentos/tendência
+        TOL_BB = 0.98
+        TOL_EMA = 0.99
 
-        # Fetch
         k15 = await get_klines(session, symbol, "15m", 210)
         k1h = await get_klines(session, symbol, "1h",  210)
         k4h = await get_klines(session, symbol, "4h",  210)
@@ -164,7 +163,6 @@ async def scan_symbol(session, symbol):
         if not (len(k15)>=50 and len(k1h)>=50 and len(k4h)>=50 and len(k1d)>=50):
             return
 
-        # --- 15m ---
         c15=[float(k[4]) for k in k15]; v15=[float(k[5]) for k in k15]
         ema9_15=ema(c15,9); ema20_15=sma(c15,20)
         u15,m15,l15=bollinger_bands(c15,20,2)
@@ -175,7 +173,6 @@ async def scan_symbol(session, symbol):
         bbw15_prev=(u15[-2]-l15[-2])/(m15[-2]+1e-12) if m15[-2] else bbw15
         bb_expand_15 = bbw15 >= bbw15_prev * TOL_BB
 
-        # --- 1h ---
         c1h=[float(k[4]) for k in k1h]; v1h=[float(k[5]) for k in k1h]
         ema9_1h=ema(c1h,9); ema20_1h=sma(c1h,20)
         ma50_1h=sma(c1h,50); ma200_1h=sma(c1h,200)
@@ -187,16 +184,13 @@ async def scan_symbol(session, symbol):
         bbw1h_prev=(u1h[-2]-l1h[-2])/(m1h[-2]+1e-12) if m1h[-2] else bbw1h
         bb_expand_1h = bbw1h >= bbw1h_prev * TOL_BB
 
-        # --- 4h ---
         c4h=[float(k[4]) for k in k4h]
         ema9_4h=ema(c4h,9); ema20_4h=sma(c4h,20)
         ma50_4h=sma(c4h,50); ma200_4h=sma(c4h,200)
 
-        # --- 1D ---
         c1d=[float(k[4]) for k in k1d]
         ema20_1d=sma(c1d,20)
 
-        # ============= 🔥 SMALL CAP EXPLOSIVA (15m/1h) =============
         small_ok = (
             (RSI_SMALL_MIN <= rsi15[-1] <= RSI_SMALL_MAX) and
             (VOL_SMALL_MIN <= vol_ratio_15 <= VOL_SMALL_MAX) and
@@ -219,7 +213,6 @@ async def scan_symbol(session, symbol):
             await tg(session, msg)
             mark(symbol, "SMALL_ALERT")
 
-        # ============= 🟩 SWING CURTO (1–3 dias) (1h/4h/1D) =============
         cross_9_20_1h = (ema9_1h[-2] <= ema20_1h[-2]) and (ema9_1h[-1] > ema20_1h[-1])
         swing_ok = (
             cross_9_20_1h and
@@ -245,32 +238,36 @@ async def scan_symbol(session, symbol):
             await tg(session, msg)
             mark(symbol, "SWING_ALERT")
 
-    except:
+    except Exception as e:
+        print(f"⚠️ Erro em scan_symbol({symbol}): {e}", flush=True)
         return
 
 # ---------------- MAIN LOOP ----------------
 async def main_loop():
+    print("🔍 Entrando em main_loop()", flush=True)
     async with aiohttp.ClientSession() as session:
-        # Mensagem única de início
         symbols = await get_top_usdt_symbols(session)
+        print(f"✅ {len(symbols)} pares obtidos da Binance", flush=True)
         await tg(session, f"✅ BOT DUALSETUP INICIADO COM SUCESSO 🚀 | {len(symbols)} pares | {now_br()}")
         if not symbols:
+            print("⚠️ Nenhum par retornado da Binance!", flush=True)
             return
         while True:
-            # Varredura paralela
+            print(f"🔁 Nova varredura iniciada: {now_br()}", flush=True)
             await asyncio.gather(*[scan_symbol(session, s) for s in symbols])
             await asyncio.sleep(10)
 
 def start_bot():
+    print("➡️ Iniciando loop principal...", flush=True)
     while True:
         try:
             asyncio.run(main_loop())
-        except Exception:
+        except Exception as e:
+            print(f"⚠️ Erro no loop principal: {e}", flush=True)
             time.sleep(5)
 
 # ---------------- RUN ----------------
 if __name__ == "__main__":
-    # Inicia o bot alguns segundos DEPOIS do Flask subir (estável no Render)
     def start_after_ready():
         time.sleep(2)
         print("BOT DUALSETUP INICIADO ✅", flush=True)

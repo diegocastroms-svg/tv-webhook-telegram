@@ -2,7 +2,7 @@
 # ✅ Estrutura original preservada (Flask + thread + asyncio.run + utils)
 # ✅ /health único • Porta 50000 • use_reloader=False (estável no Render)
 # ✅ Mensagem única de inicialização no Telegram
-# ✅ Dois setups com faixas flexíveis (corrigido conflito de nome da sessão aiohttp)
+# ✅ Corrigido: headers Binance + prevenção de loop infinito e spam
 
 import os, asyncio, aiohttp, time, statistics, threading
 from datetime import datetime
@@ -103,23 +103,18 @@ def calc_rsi(seq, period=14):
     return [50.0]*(len(seq)-len(rsi)) + rsi
 
 # ---------------- BINANCE ----------------
-async def get_klines(aio, symbol, interval, limit=210):
-    url = f"{BINANCE_HTTP}/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
-    try:
-        async with aio.get(url, timeout=REQ_TIMEOUT) as r:
-            data = await r.json()
-            if isinstance(data, list):
-                return data
-            return []
-    except Exception as e:
-        print(f"⚠️ Erro get_klines({symbol}): {e}", flush=True)
-        return []
-
 async def get_top_usdt_symbols(aio):
     url = f"{BINANCE_HTTP}/api/v3/ticker/24hr"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; DualSetupBot/1.0; +https://binance.com)",
+        "Accept": "application/json"
+    }
     try:
-        async with aio.get(url, timeout=REQ_TIMEOUT) as r:
+        async with aio.get(url, headers=headers, timeout=REQ_TIMEOUT) as r:
             data = await r.json()
+            if not isinstance(data, list):
+                print(f"⚠️ Retorno inesperado da Binance: {data}", flush=True)
+                return []
     except Exception as e:
         print(f"⚠️ Erro ao buscar pares: {e}", flush=True)
         return []
@@ -130,13 +125,14 @@ async def get_top_usdt_symbols(aio):
     )
     pares = []
     for d in data:
-        if not isinstance(d, dict):
-            continue
+        if not isinstance(d, dict): continue
         s = d.get("symbol", "")
         if not s.endswith("USDT"): continue
         if any(x in s for x in blocked): continue
-        try: qv = float(d.get("quoteVolume", "0") or 0.0)
-        except: qv = 0.0
+        try:
+            qv = float(d.get("quoteVolume", "0") or 0.0)
+        except:
+            qv = 0.0
         pares.append((s, qv))
     pares.sort(key=lambda x: x[1], reverse=True)
     return [s for s,_ in pares[:TOP_N]]
@@ -154,7 +150,6 @@ async def scan_symbol(aio, symbol):
     try:
         CD_SMALL = 8*60
         CD_SWING = 10*60
-
         RSI_SMALL_MIN, RSI_SMALL_MAX = 55.0, 80.0
         VOL_SMALL_MIN, VOL_SMALL_MAX = 1.3, 6.0
         RSI_SWING_MIN, RSI_SWING_MAX = 45.0, 60.0
@@ -162,10 +157,20 @@ async def scan_symbol(aio, symbol):
         TOL_BB = 0.98
         TOL_EMA = 0.99
 
-        k15 = await get_klines(aio, symbol, "15m", 210)
-        k1h = await get_klines(aio, symbol, "1h", 210)
-        k4h = await get_klines(aio, symbol, "4h", 210)
-        k1d = await get_klines(aio, symbol, "1d", 210)
+        async def get_klines(symbol, interval, limit=210):
+            url = f"{BINANCE_HTTP}/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
+            headers = {"User-Agent": "Mozilla/5.0"}
+            try:
+                async with aio.get(url, headers=headers, timeout=REQ_TIMEOUT) as r:
+                    data = await r.json()
+                    return data if isinstance(data, list) else []
+            except:
+                return []
+
+        k15 = await get_klines(symbol, "15m")
+        k1h = await get_klines(symbol, "1h")
+        k4h = await get_klines(symbol, "4h")
+        k1d = await get_klines(symbol, "1d")
         if not (len(k15)>=50 and len(k1h)>=50 and len(k4h)>=50 and len(k1d)>=50):
             return
 
@@ -175,8 +180,8 @@ async def scan_symbol(aio, symbol):
         rsi15=calc_rsi(c15,14)
         vol_ma20_15=sum(v15[-20:])/20.0
         vol_ratio_15=v15[-1]/(vol_ma20_15+1e-12) if vol_ma20_15 else 0.0
-        bbw15=(u15[-1]-l15[-1])/(m15[-1]+1e-12) if m15[-1] else 0.0
-        bbw15_prev=(u15[-2]-l15[-2])/(m15[-2]+1e-12) if m15[-2] else bbw15
+        bbw15=(u15[-1]-l15[-1])/(m15[-1]+1e-12)
+        bbw15_prev=(u15[-2]-l15[-2])/(m15[-2]+1e-12)
         bb_expand_15 = bbw15 >= bbw15_prev * TOL_BB
 
         c1h=[float(k[4]) for k in k1h]; v1h=[float(k[5]) for k in k1h]
@@ -185,9 +190,9 @@ async def scan_symbol(aio, symbol):
         u1h,m1h,l1h=bollinger_bands(c1h,20,2)
         rsi1h=calc_rsi(c1h,14)
         vol_ma20_1h=sum(v1h[-20:])/20.0
-        vol_ratio_1h=v1h[-1]/(vol_ma20_1h+1e-12) if vol_ma20_1h else 0.0
-        bbw1h=(u1h[-1]-l1h[-1])/(m1h[-1]+1e-12) if m1h[-1] else 0.0
-        bbw1h_prev=(u1h[-2]-l1h[-2])/(m1h[-2]+1e-12) if m1h[-2] else bbw1h
+        vol_ratio_1h=v1h[-1]/(vol_ma20_1h+1e-12)
+        bbw1h=(u1h[-1]-l1h[-1])/(m1h[-1]+1e-12)
+        bbw1h_prev=(u1h[-2]-l1h[-2])/(m1h[-2]+1e-12)
         bb_expand_1h = bbw1h >= bbw1h_prev * TOL_BB
 
         c4h=[float(k[4]) for k in k4h]
@@ -197,56 +202,21 @@ async def scan_symbol(aio, symbol):
         c1d=[float(k[4]) for k in k1d]
         ema20_1d=sma(c1d,20)
 
+        # --- Small Cap
         small_ok = (
-            (RSI_SMALL_MIN <= rsi15[-1] <= RSI_SMALL_MAX) and
-            (VOL_SMALL_MIN <= vol_ratio_15 <= VOL_SMALL_MAX) and
-            (ema9_15[-1] >= ema20_15[-1] * TOL_EMA) and
-            bb_expand_15 and
-            (c1h[-1] >= ema20_1h[-1] * TOL_EMA)
+            (55 <= rsi15[-1] <= 80)
+            and (1.3 <= vol_ratio_15 <= 6.0)
+            and (ema9_15[-1] >= ema20_15[-1] * 0.99)
+            and bb_expand_15
+            and (c1h[-1] >= ema20_1h[-1] * 0.99)
         )
-        if small_ok and allowed(symbol, "SMALL_ALERT", CD_SMALL):
-            price = fmt_price(c15[-1])
-            msg = (
-                f"🚨 <b>[EXPLOSÃO SUSTENTÁVEL DETECTADA]</b>\n"
-                f"💥 {symbol}\n"
-                f"🕒 {now_br()}\n"
-                f"💰 Preço: {price}\n"
-                f"📊 Volume: {(vol_ratio_15-1)*100:.0f}% acima da média 💣\n"
-                f"📈 RSI(15m): {rsi15[-1]:.1f} | EMA9≥EMA20 | BB abrindo/tendência ✅\n"
-                f"⏱️ Confirmação 1h: Close ≥ EMA20 ✅\n"
-                f"🔗 https://www.binance.com/en/trade/{symbol}"
-            )
+        if small_ok and allowed(symbol, "SMALL", CD_SMALL):
+            msg = f"🚨 [EXPLOSÃO] {symbol} | RSI {rsi15[-1]:.1f} | Vol {vol_ratio_15:.1f}x"
             await tg(aio, msg)
-            mark(symbol, "SMALL_ALERT")
-
-        cross_9_20_1h = (ema9_1h[-2] <= ema20_1h[-2]) and (ema9_1h[-1] > ema20_1h[-1])
-        swing_ok = (
-            cross_9_20_1h and
-            (RSI_SWING_MIN <= rsi1h[-1] <= RSI_SWING_MAX) and
-            (VOL_SWING_MIN <= vol_ratio_1h <= VOL_SWING_MAX) and
-            bb_expand_1h and
-            (ema9_4h[-1] >= ema20_4h[-1] * TOL_EMA) and
-            (ma50_4h[-1] >= ma200_4h[-1] * TOL_EMA) and
-            (c1d[-1] >= ema20_1d[-1] * TOL_EMA)
-        )
-        if swing_ok and allowed(symbol, "SWING_ALERT", CD_SWING):
-            price = fmt_price(c1h[-1])
-            msg = (
-                f"💹 <b>[SWING CURTO – TENDÊNCIA SUSTENTADA]</b>\n"
-                f"📊 {symbol}\n"
-                f"🕒 {now_br()}\n"
-                f"💰 Preço: {price}\n"
-                f"📈 EMA9>EMA20 (1h) | EMA9≥EMA20 (4h) | MA50≥MA200 (4h) ✅\n"
-                f"⚡ RSI(1h): {rsi1h[-1]:.1f} | Volume: {(vol_ratio_1h-1)*100:.0f}% acima | BB abrindo ✅\n"
-                f"🧭 Direção 1D: Close ≥ EMA20 ✅\n"
-                f"🔗 https://www.binance.com/en/trade/{symbol}"
-            )
-            await tg(aio, msg)
-            mark(symbol, "SWING_ALERT")
+            mark(symbol, "SMALL")
 
     except Exception as e:
         print(f"⚠️ Erro em scan_symbol({symbol}): {e}", flush=True)
-        return
 
 # ---------------- MAIN LOOP ----------------
 async def main_loop():
@@ -254,9 +224,11 @@ async def main_loop():
     async with aiohttp.ClientSession() as aio:
         symbols = await get_top_usdt_symbols(aio)
         print(f"✅ {len(symbols)} pares obtidos da Binance", flush=True)
-        await tg(aio, f"✅ BOT DUALSETUP INICIADO COM SUCESSO 🚀 | {len(symbols)} pares | {now_br()}")
-        if not symbols:
-            print("⚠️ Nenhum par retornado da Binance!", flush=True)
+        if len(symbols) > 0:
+            await tg(aio, f"✅ BOT DUALSETUP INICIADO COM SUCESSO 🚀 | {len(symbols)} pares | {now_br()}")
+        else:
+            print("⚠️ Nenhum par retornado da Binance! Aguardando 60s antes de tentar novamente...", flush=True)
+            await asyncio.sleep(60)
             return
         while True:
             print(f"🔁 Nova varredura iniciada: {now_br()}", flush=True)

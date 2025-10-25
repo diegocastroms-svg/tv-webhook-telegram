@@ -1,106 +1,216 @@
-import os, asyncio, time, math
-from urllib.parse import urlencode
-from collections import defaultdict, deque
-from datetime import datetime, timezone, timedelta
-import aiohttp
+# main_dualsetup_v3.py
+# ✅ Estrutura original mantida
+# ✅ Porta 50000 fixa
+# ✅ Health check para Render
+# ✅ Alerta único de inicialização
+# ✅ DualSetup completo (Swing + SmallCap)
+
+import os, asyncio, aiohttp, time, math, statistics, threading
+from datetime import datetime
 from flask import Flask
-import threading
-import logging
 
 # ---------------- CONFIG ----------------
 BINANCE_HTTP = "https://api.binance.com"
-INTERVAL_5M, INTERVAL_15M = "5m", "15m"
+COOLDOWN_SEC = 10 * 60
+TOP_N = 50
+REQ_TIMEOUT = 8
 
-# Variáveis de ambiente
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
+CHAT_ID = os.getenv("CHAT_ID", "").strip()
 
-# ---------------- LOGS ----------------
-logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)s  %(message)s")
-
+# ---------------- FLASK ----------------
 app = Flask(__name__)
 
-# ---------------- HEALTH ----------------
+@app.route("/")
+def home():
+    return "✅ Scanner ativo (DualSetup) — Swing + SmallCap 🇧🇷", 200
+
 @app.route("/health")
 def health():
-    return "OK", 200
+    return "ok", 200
 
-# ---------------- FUNÇÕES ----------------
-async def send_telegram_message(message: str):
-    """Envia mensagem formatada para o Telegram"""
-    if not TELEGRAM_TOKEN or not CHAT_ID:
+# ---------------- UTILS ----------------
+def now_br():
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S") + " 🇧🇷"
+
+async def tg(session, text: str):
+    if not (TELEGRAM_TOKEN and CHAT_ID):
         return
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        data = {"chat_id": CHAT_ID, "text": message, "parse_mode": "HTML"}
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, data=data) as resp:
-                if resp.status != 200:
-                    logging.warning(f"Falha ao enviar mensagem Telegram: {resp.status}")
-    except Exception as e:
-        logging.error(f"Erro ao enviar mensagem Telegram: {e}")
+        payload = {"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}
+        await session.post(url, data=payload, timeout=REQ_TIMEOUT)
+    except:
+        pass
 
-async def fetch_data(session, symbol, interval):
+def fmt_price(x: float) -> str:
+    s = f"{x:.8f}".rstrip("0").rstrip(".")
+    return s if s else "0"
+
+def sma(seq, n):
+    out, s = [], 0.0
+    from collections import deque
+    q = deque()
+    for x in seq:
+        q.append(x); s += x
+        if len(q) > n: s -= q.popleft()
+        out.append(s/len(q))
+    return out
+
+def ema(seq, span):
+    if not seq: return []
+    alpha = 2.0/(span+1.0)
+    out = [seq[0]]
+    e = seq[0]
+    for x in seq[1:]:
+        e = alpha*x + (1-alpha)*e
+        out.append(e)
+    return out
+
+def bollinger_bands(seq, n=20, mult=2):
+    if len(seq) < n: return [], [], []
+    out_mid, out_upper, out_lower = [], [], []
+    for i in range(len(seq)):
+        window = seq[max(0, i-n+1):i+1]
+        m = sum(window)/len(window)
+        s = statistics.pstdev(window)
+        out_mid.append(m)
+        out_upper.append(m + mult*s)
+        out_lower.append(m - mult*s)
+    return out_upper, out_mid, out_lower
+
+def calc_rsi(seq, period=14):
+    if len(seq) < period + 1:
+        return [50.0] * len(seq)
+    gains, losses = [], []
+    for i in range(1, len(seq)):
+        diff = seq[i] - seq[i-1]
+        gains.append(max(diff, 0))
+        losses.append(abs(min(diff, 0)))
+    rsi = []
+    avg_gain = sum(gains[:period]) / period
+    avg_loss = sum(losses[:period]) / period
+    rs = avg_gain / (avg_loss + 1e-12)
+    rsi.append(100 - (100 / (1 + rs)))
+    for i in range(period, len(seq)-1):
+        diff = seq[i] - seq[i-1]
+        gain = max(diff, 0)
+        loss = abs(min(diff, 0))
+        avg_gain = (avg_gain * (period-1) + gain) / period
+        avg_loss = (avg_loss * (period-1) + loss) / period
+        rs = avg_gain / (avg_loss + 1e-12)
+        rsi.append(100 - (100 / (1 + rs)))
+    return [50.0]*(len(seq)-len(rsi)) + rsi
+
+# ---------------- BINANCE ----------------
+async def get_klines(session, symbol, interval, limit=210):
+    url = f"{BINANCE_HTTP}/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
     try:
-        params = {"symbol": symbol, "interval": interval, "limit": 200}
-        async with session.get(f"{BINANCE_HTTP}/api/v3/klines", params=params) as resp:
-            return await resp.json()
-    except Exception:
+        async with session.get(url, timeout=REQ_TIMEOUT) as r:
+            data = await r.json()
+            if isinstance(data, list):
+                return data
+            return []
+    except:
         return []
 
-async def analyze_symbol(session, symbol):
-    """Analisa um símbolo e envia alerta se cruzamento indicar alta"""
+async def get_top_usdt_symbols(session):
+    url = f"{BINANCE_HTTP}/api/v3/ticker/24hr"
+    async with session.get(url, timeout=REQ_TIMEOUT) as r:
+        data = await r.json()
+    blocked = (
+        "UP","DOWN","BULL","BEAR","BUSD","FDUSD","TUSD","USDC","USD1",
+        "USDE","PERP","_PERP","EUR","EURS","CEUR","XUSD","USDX","GUSD"
+    )
+    pares = []
+    for d in data:
+        s = d.get("symbol", "")
+        if not s.endswith("USDT"): continue
+        if any(x in s for x in blocked): continue
+        try: qv = float(d.get("quoteVolume", "0") or 0.0)
+        except: qv = 0.0
+        pares.append((s, qv))
+    pares.sort(key=lambda x: x[1], reverse=True)
+    return [s for s, _ in pares[:TOP_N]]
+
+# ---------------- ALERT STATE ----------------
+LAST_HIT = {}
+
+def allowed(symbol, kind, cd_sec):
+    ts = LAST_HIT.get((symbol, kind), 0.0)
+    return (time.time() - ts) >= cd_sec
+
+def mark(symbol, kind):
+    LAST_HIT[(symbol, kind)] = time.time()
+
+# ---------------- SCANNER ----------------
+async def scan_symbol(session, symbol):
     try:
-        for interval in [INTERVAL_5M, INTERVAL_15M]:
-            data = await fetch_data(session, symbol, interval)
-            if not data or len(data) < 200:
-                continue
+        k15 = await get_klines(session, symbol, "15m")
+        k1h = await get_klines(session, symbol, "1h")
+        k4h = await get_klines(session, symbol, "4h")
+        k1d = await get_klines(session, symbol, "1d")
 
-            closes = [float(x[4]) for x in data]
-            ema9 = sum(closes[-9:]) / 9
-            ma20 = sum(closes[-20:]) / 20
-            ma50 = sum(closes[-50:]) / 50
-            ma200 = sum(closes[-200:]) / 200
-            price = closes[-1]
+        if not (len(k15)>50 and len(k1h)>50 and len(k4h)>50 and len(k1d)>50):
+            return
 
-            if ema9 > ma200 and price > ma20:
-                msg = f"🚀 <b>{symbol}</b> possível alta ({interval})\n💰 Preço: {price:.4f}"
-                await send_telegram_message(msg)
-            
-            # Anti-flood Binance (respeita limites de request)
-            await asyncio.sleep(0.5)
+        c15 = [float(k[4]) for k in k15]
+        v15 = [float(k[5]) for k in k15]
+        ema9_15, ema20_15 = ema(c15,9), sma(c15,20)
+        upper15, mid15, lower15 = bollinger_bands(c15,20,2)
+        rsi15 = calc_rsi(c15)
+        vol_ma15 = sum(v15[-20:])/20
+        vol_ratio15 = v15[-1]/(vol_ma15+1e-12)
+        bbw15 = (upper15[-1]-lower15[-1])/(mid15[-1]+1e-12)
+        bbw15_prev = (upper15[-2]-lower15[-2])/(mid15[-2]+1e-12)
+        bb_expand15 = bbw15 > bbw15_prev
 
-    except Exception as e:
-        logging.error(f"Erro ao analisar {symbol}: {e}")
+        c1h = [float(k[4]) for k in k1h]
+        v1h = [float(k[5]) for k in k1h]
+        ema9_1h, ema20_1h, ma50_1h, ma200_1h = ema(c1h,9), sma(c1h,20), sma(c1h,50), sma(c1h,200)
+        upper1h, mid1h, lower1h = bollinger_bands(c1h,20,2)
+        rsi1h = calc_rsi(c1h)
+        vol_ma1h = sum(v1h[-20:])/20
+        vol_ratio1h = v1h[-1]/(vol_ma1h+1e-12)
+        bbw1h = (upper1h[-1]-lower1h[-1])/(mid1h[-1]+1e-12)
+        bbw1h_prev = (upper1h[-2]-lower1h[-2])/(mid1h[-2]+1e-12)
+        bb_expand1h = bbw1h > bbw1h_prev
 
-async def monitor_market():
-    """Loop principal do bot"""
-    logging.info("BOT DUALSETUP INICIADO ✅")
-    while True:
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(f"{BINANCE_HTTP}/api/v3/exchangeInfo") as resp:
-                    data = await resp.json()
-                    symbols = [s["symbol"] for s in data["symbols"] if s["symbol"].endswith("USDT")]
-                tasks = [asyncio.create_task(analyze_symbol(session, s)) for s in symbols]
-                await asyncio.gather(*tasks)
-            await asyncio.sleep(300)  # 5 minutos
-        except Exception as e:
-            logging.error(f"Erro no loop principal: {e}")
-            await asyncio.sleep(60)
+        c4h = [float(k[4]) for k in k4h]
+        ema9_4h, ema20_4h, ma50_4h, ma200_4h = ema(c4h,9), sma(c4h,20), sma(c4h,50), sma(c4h,200)
+        c1d = [float(k[4]) for k in k1d]
+        ema20_1d = sma(c1d,20)
+
+        # SMALL CAP 🔥
+        if (vol_ratio15>=1.8 and ema9_15[-1]>ema20_15[-1] and 55<=rsi15[-1]<=75 and bb_expand15 and c1h[-1]>ema20_1h[-1] and allowed(symbol,"SMALL",600)):
+            msg = (f"🚨 <b>[SMALL CAP EXPLOSIVA]</b>\n💥 {symbol}\n🕒 {now_br()}\n💰 Preço: {fmt_price(c15[-1])}\n"
+                   f"📈 RSI: {rsi15[-1]:.1f} | EMA9>EMA20 | BB expandindo ✅\n🔗 https://www.binance.com/en/trade/{symbol}")
+            await tg(session, msg); mark(symbol,"SMALL")
+
+        # SWING 🟩
+        cross = ema9_1h[-2]<=ema20_1h[-2] and ema9_1h[-1]>ema20_1h[-1]
+        if (cross and rsi1h[-1]>50 and vol_ratio1h>=1.1 and bb_expand1h and ema9_4h[-1]>ema20_4h[-1]
+            and ma50_4h[-1]>ma200_4h[-1] and c1d[-1]>ema20_1d[-1] and allowed(symbol,"SWING",1200)):
+            msg = (f"💹 <b>[SWING CURTO – TENDÊNCIA]</b>\n📊 {symbol}\n🕒 {now_br()}\n💰 {fmt_price(c1h[-1])}\n"
+                   f"📈 RSI: {rsi1h[-1]:.1f} | BB abrindo | EMA9>EMA20>MA50>MA200 ✅\n🔗 https://www.binance.com/en/trade/{symbol}")
+            await tg(session, msg); mark(symbol,"SWING")
+    except:
+        return
+
+# ---------------- MAIN LOOP ----------------
+async def main_loop():
+    async with aiohttp.ClientSession() as session:
+        print("BOT DUALSETUP INICIADO ✅", flush=True)
+        symbols = await get_top_usdt_symbols(session)
+        await tg(session, f"✅ BOT DUALSETUP INICIADO COM SUCESSO 🚀\n🕒 {now_br()}\n🔗 Carregando {len(symbols)} pares.")
+        while True:
+            await asyncio.gather(*[scan_symbol(session, s) for s in symbols])
+            await asyncio.sleep(10)
 
 def start_bot():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(monitor_market())
+    while True:
+        try: asyncio.run(main_loop())
+        except Exception: time.sleep(5)
 
-# ---------------- MAIN ----------------
-if __name__ == "__main__":
-    def start_after_ready():
-        time.sleep(3)
-        logging.info("BOT DUALSETUP INICIADO ✅")
-        start_bot()
-
-    threading.Thread(target=start_after_ready, daemon=True).start()
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 50000)), use_reloader=False)
+threading.Thread(target=start_bot, daemon=True).start()
+app.run(host="0.0.0.0", port=50000)

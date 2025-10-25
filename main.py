@@ -237,7 +237,16 @@ def start_bot():
             time.sleep(5)
 
 # ---------------- RUN ----------------
+@app.route("/health")
+def health():
+    return "OK", 200
+
+
 if __name__ == "__main__":
-    print("Iniciando DualSetup Flex...", flush=True)
-    threading.Thread(target=start_bot, daemon=True).start()
+    def start_after_ready():
+        time.sleep(3)
+        print("BOT DUALSETUP INICIADO ✅", flush=True)
+        start_bot()
+
+    threading.Thread(target=start_after_ready, daemon=True).start()
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 50000)), use_reloader=False)

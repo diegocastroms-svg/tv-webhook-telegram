@@ -1,8 +1,8 @@
 # main_dualsetup_v1.py
 # ✅ Estrutura original preservada
+# ✅ Ajustado para capturar cruzamentos e altas de dias (como VIRTUAL/USDT)
 # ✅ Apenas uma notificação no início do deploy
-# ✅ Sem reinicialização automática (sem spam)
-# ✅ SWING CURTO otimizado e SMALL CAP ajustado
+# ✅ SWING e SMALL otimizados (RSI, volume, tendência)
 
 import os, asyncio, aiohttp, time, math, statistics
 from datetime import datetime
@@ -154,6 +154,7 @@ async def scan_symbol(session, symbol):
         if not (len(k15)>=50 and len(k1h)>=50 and len(k4h)>=50 and len(k1d)>=50):
             return
 
+        # --- ARRAYS ---
         c15 = [float(k[4]) for k in k15]
         v15 = [float(k[5]) for k in k15]
         ema9_15  = ema(c15, 9)
@@ -171,7 +172,6 @@ async def scan_symbol(session, symbol):
         ema9_1h  = ema(c1h, 9)
         ema20_1h = sma(c1h, 20)
         ma50_1h  = sma(c1h, 50)
-        ma200_1h = sma(c1h, 200)
         upper1h, mid1h, lower1h = bollinger_bands(c1h, 20, 2)
         rsi1h = calc_rsi(c1h, 14)
         vol_ma20_1h = sum(v1h[-20:]) / 20.0 if len(v1h) >= 20 else 0.0
@@ -212,13 +212,13 @@ async def scan_symbol(session, symbol):
             await tg(session, msg)
             mark_fire("SMALL_ALERT")
 
-        # 🟩 SWING CURTO
+        # 🟩 SWING CURTO – agora detecta cruzamento e tendência em andamento
         i1 = len(c1h) - 1
-        trend_up_1h = ema9_1h[-1] > ema20_1h[-1] and ema20_1h[-1] > ma50_1h[-1]
+        trend_up_1h = ema9_1h[-1] > ema20_1h[-1]  # menos restritivo
         swing_ok = (
             trend_up_1h and
-            rsi1h[-1] > 55.0 and
-            vol_ratio_1h >= 1.2 and
+            rsi1h[-1] > 50.0 and
+            vol_ratio_1h >= 1.0 and
             bb_expand_1h and
             ema9_4h[-1] > ema20_4h[-1] and
             c1d[-1] > ema20_1d[-1]
@@ -230,8 +230,7 @@ async def scan_symbol(session, symbol):
                 f"📊 {symbol}\n"
                 f"🕒 {now_br()}\n"
                 f"💰 Preço: {price}\n"
-                f"📈 EMA9>EMA20>MA50 (1h) ✅ | EMA9>EMA20 (4h) ✅\n"
-                f"⚡ RSI(1h): {rsi1h[-1]:.1f} | Volume: {(vol_ratio_1h-1)*100:.0f}% acima | BB abrindo ✅\n"
+                f"📈 EMA9>EMA20 (1h/4h) ✅ | RSI: {rsi1h[-1]:.1f} | Volume ok ✅ | BB abrindo ✅\n"
                 f"🧭 Direção 1D: Close > EMA20 ✅\n"
                 f"🔗 https://www.binance.com/en/trade/{symbol}"
             )

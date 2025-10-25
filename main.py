@@ -237,7 +237,20 @@ def start_bot():
             time.sleep(5)
 
 # ---------------- RUN ----------------
+@app.route("/health")
+def health():
+    return "OK", 200
+
 if __name__ == "__main__":
-    print("Iniciando DualSetup Flex...", flush=True)
-    threading.Thread(target=start_bot, daemon=True).start()
+    print("BOT DUALSETUP INICIADO ✅", flush=True)
+    try:
+        threading.Thread(target=start_bot, daemon=True).start()
+        # Mensagem única de confirmação no Telegram
+        async def startup_notice():
+            async with aiohttp.ClientSession() as session:
+                await tg(session, f"✅ BOT DUALSETUP INICIADO COM SUCESSO 🚀\n🕒 {now_br()}\n🌐 Render ativo e estável.")
+        asyncio.run(startup_notice())
+    except Exception as e:
+        print(f"Erro ao iniciar bot: {e}")
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 50000)))
+

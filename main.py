@@ -1,8 +1,8 @@
 # main_dualsetup_v2.py
 # ✅ Estrutura original preservada (Flask + thread + asyncio.run + utils)
-# ✅ Faixas flexíveis aplicadas aos setups
-# ✅ Mensagem de inicialização mantida
-# ✅ Correção final: thread inicia antes do Flask (Render fix)
+# ✅ Porta fixa 50000 + health check /health
+# ✅ use_reloader=False (corrige reinicializações no Render)
+# ✅ Mensagem única “BOT DUALSETUP INICIADO ✅”
 
 import os, asyncio, aiohttp, time, math, statistics, threading
 from datetime import datetime
@@ -22,6 +22,10 @@ app = Flask(__name__)
 @app.route("/")
 def home():
     return "✅ Scanner ativo (DualSetup Flex) — Swing + SmallCap | 🇧🇷", 200
+
+@app.route("/health")
+def health():
+    return "OK", 200
 
 # ---------------- UTILS ----------------
 def now_br():
@@ -140,7 +144,6 @@ def mark(symbol, kind):
 # ---------------- WORKER ----------------
 async def scan_symbol(session, symbol):
     try:
-        # --- cooldowns ---
         CD_SWING = 10*60
         CD_SMALL = 8*60
 
@@ -151,7 +154,6 @@ async def scan_symbol(session, symbol):
         if not (len(k15)>50 and len(k1h)>50 and len(k4h)>50 and len(k1d)>50):
             return
 
-        # --- arrays ---
         c15=[float(k[4]) for k in k15]; v15=[float(k[5]) for k in k15]
         c1h=[float(k[4]) for k in k1h]; v1h=[float(k[5]) for k in k1h]
         c4h=[float(k[4]) for k in k4h]; c1d=[float(k[4]) for k in k1d]
@@ -175,7 +177,6 @@ async def scan_symbol(session, symbol):
         bbw1h=(upper1h[-1]-lower1h[-1])/(mid1h[-1]+1e-12)
         bbw1h_prev=(upper1h[-2]-lower1h[-2])/(mid1h[-2]+1e-12)
 
-        # ---------------- SMALL CAP FLEX ----------------
         small_ok = (
             55 <= rsi15[-1] <= 80 and
             1.3 <= vol_ratio_15 <= 6.0 and
@@ -194,7 +195,6 @@ async def scan_symbol(session, symbol):
             await tg(session,msg)
             mark(symbol,"SMALL")
 
-        # ---------------- SWING FLEX ----------------
         cross_9_20 = ema9_1h[-2] <= ema20_1h[-2] and ema9_1h[-1] > ema20_1h[-1]
         swing_ok = (
             cross_9_20 and
@@ -237,20 +237,7 @@ def start_bot():
             time.sleep(5)
 
 # ---------------- RUN ----------------
-@app.route("/health")
-def health():
-    return "OK", 200
-
 if __name__ == "__main__":
-    print("BOT DUALSETUP INICIADO ✅", flush=True)
-    try:
-        threading.Thread(target=start_bot, daemon=True).start()
-        # Mensagem única de confirmação no Telegram
-        async def startup_notice():
-            async with aiohttp.ClientSession() as session:
-                await tg(session, f"✅ BOT DUALSETUP INICIADO COM SUCESSO 🚀\n🕒 {now_br()}\n🌐 Render ativo e estável.")
-        asyncio.run(startup_notice())
-    except Exception as e:
-        print(f"Erro ao iniciar bot: {e}")
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 50000)))
-
+    print("Iniciando DualSetup Flex...", flush=True)
+    threading.Thread(target=start_bot, daemon=True).start()
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 50000)), use_reloader=False)

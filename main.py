@@ -260,7 +260,7 @@ async def main_loop():
         await tg(session, f"✅ BOT DUALSETUP INICIADO COM SUCESSO 🚀 | {len(symbols)} pares | {now_br()}")
         if not symbols:
             await asyncio.sleep(30)
-            continue  # mantém cooldown e evita reinício
+            return  # mantém cooldown e evita reinício
         while True:
             await asyncio.gather(*[scan_symbol(session, s) for s in symbols])
             await asyncio.sleep(10)
@@ -279,3 +279,4 @@ if __name__ == "__main__":
         start_bot()
     threading.Thread(target=start_after_ready, daemon=True).start()
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 50000)), use_reloader=False)
+

@@ -1,15 +1,14 @@
 # main.py — Híbrido estável com ALERTAS TROCADOS (DualSetup)
-# ✅ Mantém estrutura que já funcionava (Flask + thread + aiohttp)
+# ✅ Mantém estrutura original (Flask + thread + aiohttp)
 # ✅ Porta 50000 + /health
-# ✅ Remove 3m/5m (apenas 15m/1h/4h/1d)
-# ✅ Alertas substituídos pelo DualSetup: Small Cap + Swing Curto
+# ✅ Alertas DualSetup com faixas flexíveis
+# ✅ Corrigido cooldown e removidos tokens sem SPOT (HIFI, etc)
 
 import os, asyncio, aiohttp, time, statistics, threading
 from datetime import datetime, timedelta
 from flask import Flask
 
 # ---------------- CONFIG ----------------
-# (Se algum endpoint bloquear por região, troque para api1.binance.com ou api-gcp.binance.com)
 BINANCE_HTTP = "https://api.binance.com"
 TOP_N = 80
 REQ_TIMEOUT = 8
@@ -31,7 +30,6 @@ def health():
 
 # ---------------- UTILS ----------------
 def now_br():
-    # usa UTC-3 como no código que estava ok
     return (datetime.utcnow() - timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S") + " 🇧🇷"
 
 async def tg(session, text: str):
@@ -124,22 +122,27 @@ async def get_top_usdt_symbols(session):
             data = await r.json()
     except:
         data = []
+
     blocked = (
-        "UP","DOWN","BULL","BEAR",
+        "UP","DOWN","BULL","BEAR",   # tokens alavancados
         "BUSD","FDUSD","TUSD","USDC","USDP","USD1","USDE","XUSD","USDX","GUSD","BFUSD",
         "EUR","EURS","CEUR","BRL","TRY",
-        "PERP","_PERP","STABLE","TEST"
+        "PERP","_PERP","STABLE","TEST",
+        "HIFI","SUSD","WBTC","WETH","USTC","LUNA","LUNC","VAI","VEN","IQ"  # removidos tokens fora de SPOT
     )
+
     pares = []
     for d in data if isinstance(data, list) else []:
         s = d.get("symbol", "")
-        if not s.endswith("USDT"): continue
-        if any(x in s for x in blocked): continue
+        if not s.endswith("USDT"): 
+            continue
+        if any(x in s for x in blocked): 
+            continue
         try:
             qv = float(d.get("quoteVolume", "0") or 0.0)
         except:
             qv = 0.0
-        if qv < 15_000_000:  # filtro de liquidez parecido com o que você já usava
+        if qv < 15_000_000:  # filtro de liquidez
             continue
         pares.append((s, qv))
     pares.sort(key=lambda x: x[1], reverse=True)
@@ -156,17 +159,13 @@ def mark(symbol, kind):
 # ---------------- WORKER: ALERTAS DUALSETUP ----------------
 async def scan_symbol(session, symbol):
     try:
-        # Tolerâncias / Faixas (dos alertas que você queria)
         RSI_SMALL_MIN, RSI_SMALL_MAX = 55.0, 80.0
         VOL_SMALL_MIN, VOL_SMALL_MAX = 1.3, 6.0
-
         RSI_SWING_MIN, RSI_SWING_MAX = 45.0, 60.0
         VOL_SWING_MIN, VOL_SWING_MAX = 0.8, 3.0
+        TOL_BB  = 0.98
+        TOL_EMA = 0.99
 
-        TOL_BB  = 0.98  # 2% tolerância para “BB abrindo”
-        TOL_EMA = 0.99  # 1% tolerância proximidade EMAs
-
-        # Fetch apenas 15m/1h/4h/1d
         k15 = await get_klines(session, symbol, "15m", 210)
         k1h = await get_klines(session, symbol, "1h",  210)
         k4h = await get_klines(session, symbol, "4h",  210)
@@ -174,7 +173,6 @@ async def scan_symbol(session, symbol):
         if not (len(k15)>=50 and len(k1h)>=50 and len(k4h)>=50 and len(k1d)>=50):
             return
 
-        # --- 15m ---
         c15=[float(k[4]) for k in k15]; v15=[float(k[5]) for k in k15]
         ema9_15=ema(c15,9); ema20_15=sma(c15,20)
         u15,m15,l15=bollinger_bands(c15,20,2)
@@ -185,7 +183,6 @@ async def scan_symbol(session, symbol):
         bbw15_prev=(u15[-2]-l15[-2])/(m15[-2]+1e-12) if m15[-2] else bbw15
         bb_expand_15 = bbw15 >= bbw15_prev * TOL_BB
 
-        # --- 1h ---
         c1h=[float(k[4]) for k in k1h]; v1h=[float(k[5]) for k in k1h]
         ema9_1h=ema(c1h,9); ema20_1h=sma(c1h,20)
         ma50_1h=sma(c1h,50); ma200_1h=sma(c1h,200)
@@ -197,22 +194,20 @@ async def scan_symbol(session, symbol):
         bbw1h_prev=(u1h[-2]-l1h[-2])/(m1h[-2]+1e-12) if m1h[-2] else bbw1h
         bb_expand_1h = bbw1h >= bbw1h_prev * TOL_BB
 
-        # --- 4h ---
         c4h=[float(k[4]) for k in k4h]
         ema9_4h=ema(c4h,9); ema20_4h=sma(c4h,20)
         ma50_4h=sma(c4h,50); ma200_4h=sma(c4h,200)
 
-        # --- 1D ---
         c1d=[float(k[4]) for k in k1d]
         ema20_1d=sma(c1d,20)
 
-        # ============= 🔥 SMALL CAP EXPLOSIVA (15m/1h) =============
+        # 🔥 SMALL CAP EXPLOSIVA (15m/1h)
         small_ok = (
-            (RSI_SMALL_MIN <= rsi15[-1] <= RSI_SMALL_MAX) and
-            (VOL_SMALL_MIN <= vol_ratio_15 <= VOL_SMALL_MAX) and
-            (ema9_15[-1] >= ema20_15[-1] * TOL_EMA) and
-            bb_expand_15 and
-            (c1h[-1] >= ema20_1h[-1] * TOL_EMA)
+            (RSI_SMALL_MIN <= rsi15[-1] <= RSI_SMALL_MAX)
+            and (VOL_SMALL_MIN <= vol_ratio_15 <= VOL_SMALL_MAX)
+            and (ema9_15[-1] >= ema20_15[-1] * TOL_EMA)
+            and bb_expand_15
+            and (c1h[-1] >= ema20_1h[-1] * TOL_EMA)
         )
         if small_ok and allowed(symbol, "SMALL_ALERT"):
             price = fmt_price(c15[-1])
@@ -229,16 +224,16 @@ async def scan_symbol(session, symbol):
             await tg(session, msg)
             mark(symbol, "SMALL_ALERT")
 
-        # ============= 🟩 SWING CURTO (1–3 dias) (1h/4h/1D) =============
+        # 🟩 SWING CURTO (1–3 dias)
         cross_9_20_1h = (ema9_1h[-2] <= ema20_1h[-2]) and (ema9_1h[-1] > ema20_1h[-1])
         swing_ok = (
-            cross_9_20_1h and
-            (RSI_SWING_MIN <= rsi1h[-1] <= RSI_SWING_MAX) and
-            (VOL_SWING_MIN <= vol_ratio_1h <= VOL_SWING_MAX) and
-            bb_expand_1h and
-            (ema9_4h[-1] >= ema20_4h[-1] * TOL_EMA) and
-            (ma50_4h[-1] >= ma200_4h[-1] * TOL_EMA) and
-            (c1d[-1] >= ema20_1d[-1] * TOL_EMA)
+            cross_9_20_1h
+            and (RSI_SWING_MIN <= rsi1h[-1] <= RSI_SWING_MAX)
+            and (VOL_SWING_MIN <= vol_ratio_1h <= VOL_SWING_MAX)
+            and bb_expand_1h
+            and (ema9_4h[-1] >= ema20_4h[-1] * TOL_EMA)
+            and (ma50_4h[-1] >= ma200_4h[-1] * TOL_EMA)
+            and (c1d[-1] >= ema20_1d[-1] * TOL_EMA)
         )
         if swing_ok and allowed(symbol, "SWING_ALERT"):
             price = fmt_price(c1h[-1])
@@ -264,8 +259,8 @@ async def main_loop():
         symbols = await get_top_usdt_symbols(session)
         await tg(session, f"✅ BOT DUALSETUP INICIADO COM SUCESSO 🚀 | {len(symbols)} pares | {now_br()}")
         if not symbols:
-            # se não veio lista, não dá return pra não reiniciar sem parar
             await asyncio.sleep(30)
+            continue  # mantém cooldown e evita reinício
         while True:
             await asyncio.gather(*[scan_symbol(session, s) for s in symbols])
             await asyncio.sleep(10)

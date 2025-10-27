@@ -175,7 +175,7 @@ def mark(symbol, kind):
 async def scan_symbol(session, symbol):
     try:
         # Parâmetros para tendência longa
-        RSI_LONG_MIN, RSI_LONG_MAX = 40.0, 50.0
+        RSI_LONG_MIN, RSI_LONG_MAX = 40.0, 55.0
         VOL_LONG_MIN = 1.2  # 20% acima da média
         TOL_EMA = 0.99  # tolerância para pullback
 
@@ -222,7 +222,7 @@ async def scan_symbol(session, symbol):
             (vol_ratio_4h >= VOL_LONG_MIN) and  # Volume 20% acima da média
             (ma50_4h[-1] >= ma200_4h[-1] * TOL_EMA) and  # Uptrend: MA50 > MA200
             (close_curr_4h >= ma200_4h[-1] * TOL_EMA) and  # Preço acima MA200
-            (close_curr_4h <= ma50_4h[-1] * 1.02) and  # Pullback: preço até 2% acima MA50
+            (close_curr_4h <= ma50_4h[-1] * 1.03) and  # Pullback: preço até 3% acima MA50
             (c1d[-1] >= ema20_1d[-1] * TOL_EMA) and  # Direção 1D
             continuity_4h  # Confirmação real
         )
@@ -271,3 +271,4 @@ if __name__ == "__main__":
         start_bot()
     threading.Thread(target=start_after_ready, daemon=True).start()
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 50000)), use_reloader=False)
+

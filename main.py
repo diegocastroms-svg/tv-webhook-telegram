@@ -249,13 +249,15 @@ async def scan_symbol(session, symbol):
 async def main_loop():
     async with aiohttp.ClientSession() as session:
         symbols = await get_top_usdt_symbols(session)
-        await tg(session, f"✅ BOT LONGSETUP INICIADO (Confirmado) 🚀 | {len(symbols)} pares | {now_br()}")
-        if not symbols:
-            await asyncio.sleep(30)
-            return
-        while True:
-            await asyncio.gather(*[scan_symbol(session, s) for s in symbols])
-            await asyncio.sleep(10)
+        await tg(session, f"✅ BOT LONGSETUP INICIADO (Confirmado) 🚀 | {now_br()}")
+
+while True:
+    symbols = await get_top_usdt_symbols(session)
+    if not symbols:
+        await asyncio.sleep(30)
+        continue
+    await asyncio.gather(*[scan_symbol(session, s) for s in symbols])
+    await asyncio.sleep(300)
 
 def start_bot():
     while True:
@@ -271,4 +273,5 @@ if __name__ == "__main__":
         start_bot()
     threading.Thread(target=start_after_ready, daemon=True).start()
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 50000)), use_reloader=False)
+
 

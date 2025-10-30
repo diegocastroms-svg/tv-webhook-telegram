@@ -1,8 +1,8 @@
-# main.py — LONGSETUP CONFIRMADO V2.0 (FINAL CORRIGIDO)
+# main.py — LONGSETUP CONFIRMADO V2.0 (FINAL)
 # RSI ≥ 50 | Volume ≥ 1.2x | Pullback ≤ 8%
 # SL dinâmico (swing low) | TP em 3 camadas
 # SEM ALERTA DE TESTE | SÓ ALERTAS REAIS
-# Thread ajustada (fora do if __main__) para Render
+# Thread ativa + Flask compatível com Render
 
 import os, asyncio, aiohttp, time, threading
 from datetime import datetime, timedelta
@@ -261,7 +261,6 @@ async def scan_symbol(session, symbol):
 # ---------------- MAIN LOOP ----------------
 async def main_loop():
     async with aiohttp.ClientSession() as session:
-        print("[DEBUG] main_loop iniciado com sucesso")
         await tg(session, f"<b>BOT LONGSETUP V2.0 INICIADO</b>\n{now_br()}\nScanner ativo (sem testes).")
         print(f"[{now_br()}] BOT V2.0 INICIADO | Telegram: {'OK' if TELEGRAM_TOKEN and CHAT_ID else 'NOK'}")
 
@@ -285,6 +284,6 @@ def start_bot():
             print(f"[ERRO FATAL] {e}. Reiniciando em 5s...")
             time.sleep(5)
 
-# ---------------- EXECUÇÃO DIRETA (FORA DO IF) ----------------
+# ---------------- EXECUÇÃO FINAL (COMPATÍVEL RENDER) ----------------
 threading.Thread(target=start_bot, daemon=True).start()
 app.run(host="0.0.0.0", port=int(os.getenv("PORT", 50000)))

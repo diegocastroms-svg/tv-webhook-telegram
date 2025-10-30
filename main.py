@@ -281,10 +281,8 @@ def start_bot():
         try:
             asyncio.run(main_loop())
         except Exception as e:
-            print(f"[ERRO FATAL] {e}. Reiniciando em 5s...")
+            print(f"[LOOP ERRO] {e}")
             time.sleep(5)
 
-# ---------------- EXECUÇÃO FINAL (COMPATÍVEL RENDER) ----------------
-if __name__ == "__main__":
-    threading.Thread(target=start_bot, daemon=False).start()
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT") or 10000), use_reloader=False)
+threading.Thread(target=start_bot, daemon=True).start()
+app.run(host="0.0.0.0", port=int(os.getenv("PORT", 10000)))

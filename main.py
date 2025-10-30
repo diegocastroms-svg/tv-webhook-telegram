@@ -1,18 +1,19 @@
 # main.py — LONGSETUP Confirmado (tendência longa)
 # ✅ Usa apenas candles FECHADOS
 # ✅ Continuity 4h real (último fechado vs penúltimo)
-# ✅ RSI 35-65 | Volume +10% | Tolerância 2%
-# ✅ Logs detalhados no Render
-# ✅ Thread não-daemon
+# ✅ RSI 35-65 | Volume ≥ média (1.0x) | Tolerância 2%
+# ✅ Logs detalhados + motivo da rejeição
+# ✅ Alerta de teste forçado (1x por ativo)
+# ✅ Thread não-daemon + Flask vivo
 
-import os, asyncio, aiohttp, time, statistics, threading
+import os, asyncio, aiohttp, time, threading
 from datetime import datetime, timedelta
 from flask import Flask
 
 # ---------------- CONFIG ----------------
 BINANCE_HTTP = "https://api.binance.com"
 TOP_N = 80
-REQ_TIMEOUT = 8
+REQ_TIMEOUT = 10
 COOLDOWN_SEC = 15 * 60  # 15 min
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
@@ -34,16 +35,31 @@ def now_br():
     return (datetime.utcnow() - timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S") + " BR"
 
 async def tg(session, text: str):
-    if not (TELEGRAM_TOKEN and CHAT_ID):
-        print(f"[ERRO] TELEGRAM_TOKEN ou CHAT_ID não definidos!")
-        return
+    if not TELEGRAM_TOKEN or not CHAT_ID:
+        print(f"[TG FALHOU] Token ou Chat ID ausente!")
+        print(f"   TOKEN: {'OK' if TELEGRAM_TOKEN else 'FALTANDO'}")
+        print(f"   CHAT_ID: {'OK' if CHAT_ID else 'FALTANDO'}")
+        return False
+
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": CHAT_ID,
+        "text": text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True
+    }
     try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        payload = {"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}
-        await session.post(url, data=payload, timeout=REQ_TIMEOUT)
-        print(f"[TG] Mensagem enviada: {text[:60]}...")
+        async with session.post(url, data=payload, timeout=10) as resp:
+            result = await resp.json()
+            if resp.status == 200 and result.get("ok"):
+                print(f"[TG ENVIADO] {text.split(chr(10))[0]}...")
+                return True
+            else:
+                print(f"[TG ERRO] {resp.status} | {result.get('description', 'Sem descrição')}")
+                return False
     except Exception as e:
-        print(f"[ERRO TG] {e}")
+        print(f"[TG EXCEÇÃO] {e}")
+        return False
 
 def fmt_price(x: float) -> str:
     s = f"{x:.8f}".rstrip("0").rstrip(".")
@@ -159,7 +175,7 @@ async def scan_symbol(session, symbol):
     try:
         # === PARÂMETROS FLEXÍVEIS ===
         RSI_MIN, RSI_MAX = 35.0, 65.0
-        VOL_MIN = 1.1
+        VOL_MIN = 1.0  # ← REDUZIDO: aceita volume igual ou maior
         TOL = 0.98
 
         # === DADOS (APENAS FECHADOS) ===
@@ -171,24 +187,24 @@ async def scan_symbol(session, symbol):
             return
 
         # --- 1h (RSI + volume) ---
-        c1h = [float(x[4]) for x in k1h[:-1]]  # até o penúltimo (fechado)
+        c1h = [float(x[4]) for x in k1h[:-1]]
         v1h = [float(x[5]) for x in k1h[:-1]]
         rsi1h = calc_rsi(c1h, 14)
         vol_ma20_1h = sum(v1h[-21:-1]) / 20.0 if len(v1h) >= 21 else 0.0
         vol_ratio_1h = v1h[-1] / (vol_ma20_1h + 1e-12)
 
         # --- 4h (tendência + continuity) ---
-        c4h = [float(x[4]) for x in k4h[:-2]]  # até o antepenúltimo
+        c4h = [float(x[4]) for x in k4h[:-2]]
         v4h = [float(x[5]) for x in k4h[:-2]]
         ma50_4h = sma(c4h, 50)
         ma200_4h = sma(c4h, 200)
         vol_ma20_4h = sum(v4h[-21:-1]) / 20.0 if len(v4h) >= 21 else 0.0
         vol_ratio_4h = v4h[-1] / (vol_ma20_4h + 1e-12)
 
-        # === CONTINUIDADE REAL (último fechado vs penúltimo) ===
+        # === CONTINUIDADE REAL ===
         if len(k4h) < 3: return
-        high_prev_4h = float(k4h[-3][2])   # penúltimo
-        close_curr_4h = float(k4h[-2][4])  # último fechado
+        high_prev_4h = float(k4h[-3][2])
+        close_curr_4h = float(k4h[-2][4])
         vol_curr_4h = float(k4h[-2][5])
         vol_prev_4h = float(k4h[-3][5])
         continuity_4h = (close_curr_4h > high_prev_4h) and (vol_curr_4h > vol_prev_4h)
@@ -198,23 +214,32 @@ async def scan_symbol(session, symbol):
         ema20_1d = ema(c1d, 20)
 
         # === CONDIÇÕES LONGSETUP ===
-        long_ok = (
-            (RSI_MIN <= rsi1h[-1] <= RSI_MAX) and
-            (vol_ratio_4h >= VOL_MIN) and
-            (ma50_4h[-1] >= ma200_4h[-1] * TOL) and
-            (close_curr_4h >= ma200_4h[-1] * TOL) and
-            (close_curr_4h <= ma50_4h[-1] * 1.05) and  # pullback até 5%
-            (c1d[-1] >= ema20_1d[-1] * TOL) and
-            continuity_4h
-        )
+        cond_rsi = RSI_MIN <= rsi1h[-1] <= RSI_MAX
+        cond_vol = vol_ratio_4h >= VOL_MIN
+        cond_ma = ma50_4h[-1] >= ma200_4h[-1] * TOL
+        cond_price_ma200 = close_curr_4h >= ma200_4h[-1] * TOL
+        cond_pullback = close_curr_4h <= ma50_4h[-1] * 1.05
+        cond_1d = c1d[-1] >= ema20_1d[-1] * TOL
+        cond_cont = continuity_4h
 
-        # === LOGS DETALHADOS ===
+        long_ok = cond_rsi and cond_vol and cond_ma and cond_price_ma200 and cond_pullback and cond_1d and cond_cont
+
+        # === LOGS DETALHADOS COM MOTIVO ===
         print(f"\n[{now_br()}] {symbol} | Preço: {fmt_price(close_curr_4h)}")
-        print(f"  RSI: {rsi1h[-1]:.1f} [{'OK' if RSI_MIN <= rsi1h[-1] <= RSI_MAX else 'NOK'}] | Vol: {vol_ratio_4h:.2f}x [{'OK' if vol_ratio_4h >= VOL_MIN else 'NOK'}]")
-        print(f"  MA50≥MA200: {ma50_4h[-1] >= ma200_4h[-1]*TOL} | Preço≥MA200: {close_curr_4h >= ma200_4h[-1]*TOL}")
-        print(f"  Pullback≤5%: {close_curr_4h <= ma50_4h[-1]*1.05} | 1D≥EMA20: {c1d[-1] >= ema20_1d[-1]*TOL}")
-        print(f"  Continuity: Close>{high_prev_4h:.2f}? {close_curr_4h>high_prev_4h} | Vol↑? {vol_curr_4h>vol_prev_4h} → {continuity_4h}")
+        print(f"  RSI: {rsi1h[-1]:.1f} [{'OK' if cond_rsi else 'NOK'}] | "
+              f"Vol: {vol_ratio_4h:.3f}x [{'OK' if cond_vol else f'NOK (≥{VOL_MIN})'}]")
+        print(f"  MA50≥MA200: {cond_ma} | Preço≥MA200: {cond_price_ma200}")
+        print(f"  Pullback≤5%: {cond_pullback} | 1D≥EMA20: {cond_1d}")
+        print(f"  Continuity: Close>{high_prev_4h:.2f}? {close_curr_4h>high_prev_4h} | Vol↑? {vol_curr_4h>vol_prev_4h} → {cond_cont}")
 
+        # === ALERTA DE TESTE (1x por ativo) ===
+        if allowed(symbol, "TEST_ALERT"):
+            test_msg = f"<b>TESTE DE ALERTA</b>\n{symbol} | Preço: {fmt_price(close_curr_4h)}\nVol: {vol_ratio_4h:.3f}x | RSI: {rsi1h[-1]:.1f}"
+            if await tg(session, test_msg):
+                mark(symbol, "TEST_ALERT")
+                print(f"[TESTE] Enviado para {symbol}")
+
+        # === ALERTA REAL ===
         if long_ok and allowed(symbol, "LONG_ALERT"):
             msg = (
                 f"<b>[LONGSETUP – CONFIRMADO]</b>\n"
@@ -230,11 +255,21 @@ async def scan_symbol(session, symbol):
                 f"   TP: {fmt_price(close_curr_4h * 1.10)} (+10%)\n"
                 f"🔗 https://www.binance.com/en/trade/{symbol}"
             )
-            await tg(session, msg)
-            mark(symbol, "LONG_ALERT")
-            print(f"ALERTA ENVIADO: {symbol}")
+            if await tg(session, msg):
+                mark(symbol, "LONG_ALERT")
+                print(f"ALERTA ENVIADO: {symbol}")
+            else:
+                print(f"ALERTA NÃO ENVIADO (TG falhou): {symbol}")
         else:
-            print(f"Setup não confirmado\n")
+            motivos = []
+            if not cond_rsi: motivos.append("RSI fora")
+            if not cond_vol: motivos.append(f"Vol < {VOL_MIN}x")
+            if not cond_ma: motivos.append("MA50 < MA200")
+            if not cond_price_ma200: motivos.append("Preço < MA200")
+            if not cond_pullback: motivos.append("Pullback > 5%")
+            if not cond_1d: motivos.append("1D < EMA20")
+            if not cond_cont: motivos.append("Sem continuidade")
+            print(f"Setup não confirmado → {', '.join(motivos)}")
 
     except Exception as e:
         print(f"[ERRO SCAN] {symbol}: {e}")
@@ -242,8 +277,9 @@ async def scan_symbol(session, symbol):
 # ---------------- MAIN LOOP ----------------
 async def main_loop():
     async with aiohttp.ClientSession() as session:
-        await tg(session, f"BOT LONGSETUP INICIADO | {now_br()}")
-        print(f"[{now_br()}] BOT INICIADO")
+        # Mensagem de início
+        await tg(session, f"<b>BOT LONGSETUP INICIADO</b>\n{now_br()}\nScanner de tendência longa ativo.")
+        print(f"[{now_br()}] BOT INICIADO | Telegram: {'OK' if TELEGRAM_TOKEN and CHAT_ID else 'NOK'}")
 
         while True:
             start = time.time()
@@ -271,11 +307,9 @@ if __name__ == "__main__":
         time.sleep(3)
         start_bot()
 
-    # Thread NÃO daemon → Render não mata
     bot_thread = threading.Thread(target=run_bot_background, daemon=False)
     bot_thread.start()
 
-    # Flask no processo principal
     port = int(os.getenv("PORT", 50000))
     print(f"[FLASK] Iniciando na porta {port}")
     app.run(host="0.0.0.0", port=port, use_reloader=False)

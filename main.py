@@ -1,9 +1,7 @@
-# main.py — LONGSETUP Confirmado (tendência longa)
-# ✅ Usa apenas candles FECHADOS
-# ✅ Continuity 4h real (último fechado vs penúltimo)
-# ✅ RSI 35-65 | Volume ≥ média (1.0x) | Tolerância 2%
-# ✅ Logs detalhados + motivo da rejeição
-# ✅ Alerta de teste forçado (1x por ativo)
+# main.py — LONGSETUP CONFIRMADO V2.0 (Tendência Longa)
+# ✅ RSI ≥ 50 | Volume ≥ 1.2x | Pullback ≤ 8%
+# ✅ SL dinâmico (swing low) | TP em 3 camadas
+# ✅ Logs com motivo exato | Alerta de teste
 # ✅ Thread não-daemon + Flask vivo
 
 import os, asyncio, aiohttp, time, threading
@@ -24,7 +22,7 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "Scanner ativo (LongSetup Confirmado) — Tendência Longa 1h/4h/1D", 200
+    return "Scanner ativo (LongSetup V2.0) — Tendência Longa 1h/4h/1D", 200
 
 @app.route("/health")
 def health():
@@ -173,9 +171,10 @@ def mark(symbol, kind):
 # ---------------- WORKER ----------------
 async def scan_symbol(session, symbol):
     try:
-        # === PARÂMETROS FLEXÍVEIS ===
-        RSI_MIN, RSI_MAX = 35.0, 65.0
-        VOL_MIN = 1.0  # ← REDUZIDO: aceita volume igual ou maior
+        # === PARÂMETROS OTIMIZADOS (V2.0) ===
+        RSI_MIN = 50.0          # ← Mais momentum
+        VOL_MIN = 1.2           # ← +20% no candle de continuidade
+        PULLBACK_MAX = 1.08     # ← ≤ 8% (mais realista)
         TOL = 0.98
 
         # === DADOS (APENAS FECHADOS) ===
@@ -186,14 +185,11 @@ async def scan_symbol(session, symbol):
         if not (len(k1h) >= 52 and len(k4h) >= 52 and len(k1d) >= 52):
             return
 
-        # --- 1h (RSI + volume) ---
+        # --- 1h (RSI) ---
         c1h = [float(x[4]) for x in k1h[:-1]]
-        v1h = [float(x[5]) for x in k1h[:-1]]
         rsi1h = calc_rsi(c1h, 14)
-        vol_ma20_1h = sum(v1h[-21:-1]) / 20.0 if len(v1h) >= 21 else 0.0
-        vol_ratio_1h = v1h[-1] / (vol_ma20_1h + 1e-12)
 
-        # --- 4h (tendência + continuity) ---
+        # --- 4h (tendência + continuity + volume) ---
         c4h = [float(x[4]) for x in k4h[:-2]]
         v4h = [float(x[5]) for x in k4h[:-2]]
         ma50_4h = sma(c4h, 50)
@@ -213,46 +209,58 @@ async def scan_symbol(session, symbol):
         c1d = [float(x[4]) for x in k1d[:-1]]
         ema20_1d = ema(c1d, 20)
 
-        # === CONDIÇÕES LONGSETUP ===
-        cond_rsi = RSI_MIN <= rsi1h[-1] <= RSI_MAX
+        # === SL DINÂMICO (swing low dos últimos 4 candles 4h) ===
+        recent_lows = [float(x[3]) for x in k4h[-5:-1]]  # low dos últimos 4 candles
+        swing_low = min(recent_lows)
+        sl_price = swing_low * 0.995  # 0.5% abaixo do swing low
+
+        # === CONDIÇÕES LONGSETUP V2.0 ===
+        cond_rsi = rsi1h[-1] >= RSI_MIN
         cond_vol = vol_ratio_4h >= VOL_MIN
         cond_ma = ma50_4h[-1] >= ma200_4h[-1] * TOL
         cond_price_ma200 = close_curr_4h >= ma200_4h[-1] * TOL
-        cond_pullback = close_curr_4h <= ma50_4h[-1] * 1.05
+        cond_pullback = close_curr_4h <= ma50_4h[-1] * PULLBACK_MAX
         cond_1d = c1d[-1] >= ema20_1d[-1] * TOL
         cond_cont = continuity_4h
 
         long_ok = cond_rsi and cond_vol and cond_ma and cond_price_ma200 and cond_pullback and cond_1d and cond_cont
 
-        # === LOGS DETALHADOS COM MOTIVO ===
+        # === LOGS DETALHADOS ===
         print(f"\n[{now_br()}] {symbol} | Preço: {fmt_price(close_curr_4h)}")
-        print(f"  RSI: {rsi1h[-1]:.1f} [{'OK' if cond_rsi else 'NOK'}] | "
-              f"Vol: {vol_ratio_4h:.3f}x [{'OK' if cond_vol else f'NOK (≥{VOL_MIN})'}]")
+        print(f"  RSI: {rsi1h[-1]:.1f} [{'OK' if cond_rsi else 'NOK'}] | Vol: {vol_ratio_4h:.3f}x [{'OK' if cond_vol else f'NOK (≥{VOL_MIN})'}]")
         print(f"  MA50≥MA200: {cond_ma} | Preço≥MA200: {cond_price_ma200}")
-        print(f"  Pullback≤5%: {cond_pullback} | 1D≥EMA20: {cond_1d}")
+        print(f"  Pullback≤8%: {cond_pullback} | 1D≥EMA20: {cond_1d}")
         print(f"  Continuity: Close>{high_prev_4h:.2f}? {close_curr_4h>high_prev_4h} | Vol↑? {vol_curr_4h>vol_prev_4h} → {cond_cont}")
+        print(f"  SL: {fmt_price(sl_price)} (swing low)")
 
         # === ALERTA DE TESTE (1x por ativo) ===
         if allowed(symbol, "TEST_ALERT"):
-            test_msg = f"<b>TESTE DE ALERTA</b>\n{symbol} | Preço: {fmt_price(close_curr_4h)}\nVol: {vol_ratio_4h:.3f}x | RSI: {rsi1h[-1]:.1f}"
+            test_msg = f"<b>TESTE V2.0</b>\n{symbol} | Preço: {fmt_price(close_curr_4h)}\nRSI: {rsi1h[-1]:.1f} | Vol: {vol_ratio_4h:.3f}x"
             if await tg(session, test_msg):
                 mark(symbol, "TEST_ALERT")
                 print(f"[TESTE] Enviado para {symbol}")
 
         # === ALERTA REAL ===
         if long_ok and allowed(symbol, "LONG_ALERT"):
+            # TP em camadas
+            tp1 = close_curr_4h * 1.05   # +5%
+            tp2 = close_curr_4h * 1.10   # +10%
+            tp3 = "Trailing Stop"
+
             msg = (
-                f"<b>[LONGSETUP – CONFIRMADO]</b>\n"
+                f"<b>[LONGSETUP V2.0 – CONFIRMADO]</b>\n"
                 f"📊 {symbol}\n"
                 f"🕒 {now_br()}\n"
                 f"💰 Preço: {fmt_price(close_curr_4h)}\n"
                 f"📈 MA50≥MA200 | Preço ≥ MA200\n"
                 f"⚡ RSI: {rsi1h[-1]:.1f} | Vol: +{(vol_ratio_4h-1)*100:.0f}%\n"
-                f"🧭 Pullback OK | 1D ↑\n"
+                f"🧭 Pullback ≤8% | 1D ↑\n"
                 f"⏱️ <b>Continuidade 4h confirmada</b>\n"
-                f"🔧 Compra: {fmt_price(close_curr_4h)}\n"
-                f"   SL: {fmt_price(close_curr_4h * 0.97)} (-3%)\n"
-                f"   TP: {fmt_price(close_curr_4h * 1.10)} (+10%)\n"
+                f"🔧 <b>Compra:</b> {fmt_price(close_curr_4h)}\n"
+                f"   <b>SL:</b> {fmt_price(sl_price)} (swing low)\n"
+                f"   <b>TP1:</b> {fmt_price(tp1)} (+5%)\n"
+                f"   <b>TP2:</b> {fmt_price(tp2)} (+10%)\n"
+                f"   <b>TP3:</b> {tp3}\n"
                 f"🔗 https://www.binance.com/en/trade/{symbol}"
             )
             if await tg(session, msg):
@@ -262,11 +270,11 @@ async def scan_symbol(session, symbol):
                 print(f"ALERTA NÃO ENVIADO (TG falhou): {symbol}")
         else:
             motivos = []
-            if not cond_rsi: motivos.append("RSI fora")
+            if not cond_rsi: motivos.append(f"RSI < {RSI_MIN}")
             if not cond_vol: motivos.append(f"Vol < {VOL_MIN}x")
             if not cond_ma: motivos.append("MA50 < MA200")
             if not cond_price_ma200: motivos.append("Preço < MA200")
-            if not cond_pullback: motivos.append("Pullback > 5%")
+            if not cond_pullback: motivos.append("Pullback > 8%")
             if not cond_1d: motivos.append("1D < EMA20")
             if not cond_cont: motivos.append("Sem continuidade")
             print(f"Setup não confirmado → {', '.join(motivos)}")
@@ -277,9 +285,8 @@ async def scan_symbol(session, symbol):
 # ---------------- MAIN LOOP ----------------
 async def main_loop():
     async with aiohttp.ClientSession() as session:
-        # Mensagem de início
-        await tg(session, f"<b>BOT LONGSETUP INICIADO</b>\n{now_br()}\nScanner de tendência longa ativo.")
-        print(f"[{now_br()}] BOT INICIADO | Telegram: {'OK' if TELEGRAM_TOKEN and CHAT_ID else 'NOK'}")
+        await tg(session, f"<b>BOT LONGSETUP V2.0 INICIADO</b>\n{now_br()}\nFiltros mais inteligentes + SL dinâmico.")
+        print(f"[{now_br()}] BOT V2.0 INICIADO | Telegram: {'OK' if TELEGRAM_TOKEN and CHAT_ID else 'NOK'}")
 
         while True:
             start = time.time()

@@ -2,7 +2,7 @@
 # RSI ≥ 50 | Volume ≥ 1.2x | Pullback ≤ 8%
 # SL dinâmico (swing low) | TP em 3 camadas
 # SEM ALERTA DE TESTE | SÓ ALERTAS REAIS
-# Thread não-daemon + Flask vivo
+# Thread ajustada para Render (garante execução paralela)
 
 import os, asyncio, aiohttp, time, threading
 from datetime import datetime, timedelta
@@ -288,13 +288,11 @@ def start_bot():
 # ---------------- RUN ----------------
 if __name__ == "__main__":
     def run_bot_background():
-        time.sleep(3)
         print("[DEBUG] run_bot_background iniciado")
         start_bot()
 
-    bot_thread = threading.Thread(target=run_bot_background, daemon=True)
-    bot_thread.start()
+    threading.Thread(target=run_bot_background, daemon=True).start()
 
     port = int(os.getenv("PORT", 50000))
     print(f"[FLASK] Iniciando na porta {port}")
-    app.run(host="0.0.0.0", port=port, use_reloader=False)
+    app.run(host="0.0.0.0", port=port, use_reloader=False, threaded=True)

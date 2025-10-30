@@ -300,10 +300,11 @@ if __name__ == "__main__":
         time.sleep(3)
         start_bot()
 
-    bot_thread = threading.Thread(target=run_bot_background, daemon=False)
+    bot_thread = threading.Thread(target=run_bot_background, daemon=True)
     bot_thread.start()
 
     port = int(os.getenv("PORT", 50000))
     print(f"[FLASK] Iniciando na porta {port}")
     app.run(host="0.0.0.0", port=port, use_reloader=False)
+
 

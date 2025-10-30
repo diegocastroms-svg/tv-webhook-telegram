@@ -172,10 +172,10 @@ def mark(symbol, kind):
 async def scan_symbol(session, symbol):
     try:
         # === PARÂMETROS OTIMIZADOS (V2.0) ===
-        RSI_MIN = 50.0
-        VOL_MIN = 1.2
-        PULLBACK_MAX = 1.08
-        TOL = 0.98
+        RSI_MIN = 48.0
+        VOL_MIN = 1.1
+        PULLBACK_MAX = 1.10
+        TOL = 0.99
 
         # === DADOS (APENAS FECHADOS) ===
         k1h = await get_klines(session, symbol, "1h", 210)
@@ -306,3 +306,4 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", 50000))
     print(f"[FLASK] Iniciando na porta {port}")
     app.run(host="0.0.0.0", port=port, use_reloader=False)
+

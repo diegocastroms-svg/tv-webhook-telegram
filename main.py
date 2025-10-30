@@ -171,13 +171,11 @@ def mark(symbol, kind):
 # ---------------- WORKER ----------------
 async def scan_symbol(session, symbol):
     try:
-        # === PARÂMETROS OTIMIZADOS (V2.0) ===
         RSI_MIN = 48.0
         VOL_MIN = 1.1
         PULLBACK_MAX = 1.10
         TOL = 0.99
 
-        # === DADOS (APENAS FECHADOS) ===
         k1h = await get_klines(session, symbol, "1h", 210)
         k4h = await get_klines(session, symbol, "4h", 210)
         k1d = await get_klines(session, symbol, "1d", 210)
@@ -185,11 +183,9 @@ async def scan_symbol(session, symbol):
         if not (len(k1h) >= 52 and len(k4h) >= 52 and len(k1d) >= 52):
             return
 
-        # --- 1h (RSI) ---
         c1h = [float(x[4]) for x in k1h[:-1]]
         rsi1h = calc_rsi(c1h, 14)
 
-        # --- 4h (tendência + continuity + volume) ---
         c4h = [float(x[4]) for x in k4h[:-2]]
         v4h = [float(x[5]) for x in k4h[:-2]]
         ma50_4h = sma(c4h, 50)
@@ -197,7 +193,6 @@ async def scan_symbol(session, symbol):
         vol_ma20_4h = sum(v4h[-21:-1]) / 20.0 if len(v4h) >= 21 else 0.0
         vol_ratio_4h = v4h[-1] / (vol_ma20_4h + 1e-12)
 
-        # === CONTINUIDADE REAL ===
         if len(k4h) < 3: return
         high_prev_4h = float(k4h[-3][2])
         close_curr_4h = float(k4h[-2][4])
@@ -205,16 +200,13 @@ async def scan_symbol(session, symbol):
         vol_prev_4h = float(k4h[-3][5])
         continuity_4h = (close_curr_4h > high_prev_4h) and (vol_curr_4h > vol_prev_4h)
 
-        # --- 1d (tendência) ---
         c1d = [float(x[4]) for x in k1d[:-1]]
         ema20_1d = ema(c1d, 20)
 
-        # === SL DINÂMICO (swing low dos últimos 4 candles 4h) ===
         recent_lows = [float(x[3]) for x in k4h[-5:-1]]
         swing_low = min(recent_lows)
         sl_price = swing_low * 0.995
 
-        # === CONDIÇÕES LONGSETUP V2.0 ===
         cond_rsi = rsi1h[-1] >= RSI_MIN
         cond_vol = vol_ratio_4h >= VOL_MIN
         cond_ma = ma50_4h[-1] >= ma200_4h[-1] * TOL
@@ -225,7 +217,6 @@ async def scan_symbol(session, symbol):
 
         long_ok = cond_rsi and cond_vol and cond_ma and cond_price_ma200 and cond_pullback and cond_1d and cond_cont
 
-        # === LOGS DETALHADOS (APENAS REJEIÇÕES) ===
         if not long_ok:
             motivos = []
             if not cond_rsi: motivos.append(f"RSI < {RSI_MIN}")
@@ -236,9 +227,8 @@ async def scan_symbol(session, symbol):
             if not cond_1d: motivos.append("1D < EMA20")
             if not cond_cont: motivos.append("Sem continuidade")
             print(f"[{now_br()}] {symbol} | Setup não confirmado → {', '.join(motivos)}")
-            return  # ← Sai cedo se não for válido
+            return
 
-        # === ALERTA REAL (SÓ QUANDO FOR 100% VÁLIDO) ===
         if allowed(symbol, "LONG_ALERT"):
             tp1 = close_curr_4h * 1.05
             tp2 = close_curr_4h * 1.10
@@ -271,6 +261,7 @@ async def scan_symbol(session, symbol):
 # ---------------- MAIN LOOP ----------------
 async def main_loop():
     async with aiohttp.ClientSession() as session:
+        print("[DEBUG] main_loop iniciado com sucesso")
         await tg(session, f"<b>BOT LONGSETUP V2.0 INICIADO</b>\n{now_br()}\nScanner ativo (sem testes).")
         print(f"[{now_br()}] BOT V2.0 INICIADO | Telegram: {'OK' if TELEGRAM_TOKEN and CHAT_ID else 'NOK'}")
 
@@ -298,6 +289,7 @@ def start_bot():
 if __name__ == "__main__":
     def run_bot_background():
         time.sleep(3)
+        print("[DEBUG] run_bot_background iniciado")
         start_bot()
 
     bot_thread = threading.Thread(target=run_bot_background, daemon=True)
@@ -306,5 +298,3 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", 50000))
     print(f"[FLASK] Iniciando na porta {port}")
     app.run(host="0.0.0.0", port=port, use_reloader=False)
-
-

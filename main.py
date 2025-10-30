@@ -285,6 +285,6 @@ def start_bot():
             time.sleep(5)
 
 # ---------------- EXECUÇÃO FINAL (COMPATÍVEL RENDER) ----------------
-threading.Thread(target=start_bot, daemon=True).start()
-app.run(host="0.0.0.0", port=int(os.getenv("PORT") or 10000))
-
+if __name__ == "__main__":
+    threading.Thread(target=start_bot, daemon=False).start()
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT") or 10000), use_reloader=False)

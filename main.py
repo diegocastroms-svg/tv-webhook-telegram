@@ -1,8 +1,8 @@
-# main.py — LONGSETUP CONFIRMADO V2.0 (Tendência Longa)
-# ✅ RSI ≥ 50 | Volume ≥ 1.2x | Pullback ≤ 8%
-# ✅ SL dinâmico (swing low) | TP em 3 camadas
-# ✅ Logs com motivo exato | Alerta de teste
-# ✅ Thread não-daemon + Flask vivo
+# main.py — LONGSETUP CONFIRMADO V2.0 (FINAL)
+# RSI ≥ 50 | Volume ≥ 1.2x | Pullback ≤ 8%
+# SL dinâmico (swing low) | TP em 3 camadas
+# SEM ALERTA DE TESTE | SÓ ALERTAS REAIS
+# Thread não-daemon + Flask vivo
 
 import os, asyncio, aiohttp, time, threading
 from datetime import datetime, timedelta
@@ -172,9 +172,9 @@ def mark(symbol, kind):
 async def scan_symbol(session, symbol):
     try:
         # === PARÂMETROS OTIMIZADOS (V2.0) ===
-        RSI_MIN = 50.0          # ← Mais momentum
-        VOL_MIN = 1.2           # ← +20% no candle de continuidade
-        PULLBACK_MAX = 1.08     # ← ≤ 8% (mais realista)
+        RSI_MIN = 50.0
+        VOL_MIN = 1.2
+        PULLBACK_MAX = 1.08
         TOL = 0.98
 
         # === DADOS (APENAS FECHADOS) ===
@@ -210,9 +210,9 @@ async def scan_symbol(session, symbol):
         ema20_1d = ema(c1d, 20)
 
         # === SL DINÂMICO (swing low dos últimos 4 candles 4h) ===
-        recent_lows = [float(x[3]) for x in k4h[-5:-1]]  # low dos últimos 4 candles
+        recent_lows = [float(x[3]) for x in k4h[-5:-1]]
         swing_low = min(recent_lows)
-        sl_price = swing_low * 0.995  # 0.5% abaixo do swing low
+        sl_price = swing_low * 0.995
 
         # === CONDIÇÕES LONGSETUP V2.0 ===
         cond_rsi = rsi1h[-1] >= RSI_MIN
@@ -225,50 +225,8 @@ async def scan_symbol(session, symbol):
 
         long_ok = cond_rsi and cond_vol and cond_ma and cond_price_ma200 and cond_pullback and cond_1d and cond_cont
 
-        # === LOGS DETALHADOS ===
-        print(f"\n[{now_br()}] {symbol} | Preço: {fmt_price(close_curr_4h)}")
-        print(f"  RSI: {rsi1h[-1]:.1f} [{'OK' if cond_rsi else 'NOK'}] | Vol: {vol_ratio_4h:.3f}x [{'OK' if cond_vol else f'NOK (≥{VOL_MIN})'}]")
-        print(f"  MA50≥MA200: {cond_ma} | Preço≥MA200: {cond_price_ma200}")
-        print(f"  Pullback≤8%: {cond_pullback} | 1D≥EMA20: {cond_1d}")
-        print(f"  Continuity: Close>{high_prev_4h:.2f}? {close_curr_4h>high_prev_4h} | Vol↑? {vol_curr_4h>vol_prev_4h} → {cond_cont}")
-        print(f"  SL: {fmt_price(sl_price)} (swing low)")
-
-        # === ALERTA DE TESTE (1x por ativo) ===
-        if allowed(symbol, "TEST_ALERT"):
-            test_msg = f"<b>TESTE V2.0</b>\n{symbol} | Preço: {fmt_price(close_curr_4h)}\nRSI: {rsi1h[-1]:.1f} | Vol: {vol_ratio_4h:.3f}x"
-            if await tg(session, test_msg):
-                mark(symbol, "TEST_ALERT")
-                print(f"[TESTE] Enviado para {symbol}")
-
-        # === ALERTA REAL ===
-        if long_ok and allowed(symbol, "LONG_ALERT"):
-            # TP em camadas
-            tp1 = close_curr_4h * 1.05   # +5%
-            tp2 = close_curr_4h * 1.10   # +10%
-            tp3 = "Trailing Stop"
-
-            msg = (
-                f"<b>[LONGSETUP V2.0 – CONFIRMADO]</b>\n"
-                f"📊 {symbol}\n"
-                f"🕒 {now_br()}\n"
-                f"💰 Preço: {fmt_price(close_curr_4h)}\n"
-                f"📈 MA50≥MA200 | Preço ≥ MA200\n"
-                f"⚡ RSI: {rsi1h[-1]:.1f} | Vol: +{(vol_ratio_4h-1)*100:.0f}%\n"
-                f"🧭 Pullback ≤8% | 1D ↑\n"
-                f"⏱️ <b>Continuidade 4h confirmada</b>\n"
-                f"🔧 <b>Compra:</b> {fmt_price(close_curr_4h)}\n"
-                f"   <b>SL:</b> {fmt_price(sl_price)} (swing low)\n"
-                f"   <b>TP1:</b> {fmt_price(tp1)} (+5%)\n"
-                f"   <b>TP2:</b> {fmt_price(tp2)} (+10%)\n"
-                f"   <b>TP3:</b> {tp3}\n"
-                f"🔗 https://www.binance.com/en/trade/{symbol}"
-            )
-            if await tg(session, msg):
-                mark(symbol, "LONG_ALERT")
-                print(f"ALERTA ENVIADO: {symbol}")
-            else:
-                print(f"ALERTA NÃO ENVIADO (TG falhou): {symbol}")
-        else:
+        # === LOGS DETALHADOS (APENAS REJEIÇÕES) ===
+        if not long_ok:
             motivos = []
             if not cond_rsi: motivos.append(f"RSI < {RSI_MIN}")
             if not cond_vol: motivos.append(f"Vol < {VOL_MIN}x")
@@ -277,7 +235,35 @@ async def scan_symbol(session, symbol):
             if not cond_pullback: motivos.append("Pullback > 8%")
             if not cond_1d: motivos.append("1D < EMA20")
             if not cond_cont: motivos.append("Sem continuidade")
-            print(f"Setup não confirmado → {', '.join(motivos)}")
+            print(f"[{now_br()}] {symbol} | Setup não confirmado → {', '.join(motivos)}")
+            return  # ← Sai cedo se não for válido
+
+        # === ALERTA REAL (SÓ QUANDO FOR 100% VÁLIDO) ===
+        if allowed(symbol, "LONG_ALERT"):
+            tp1 = close_curr_4h * 1.05
+            tp2 = close_curr_4h * 1.10
+
+            msg = (
+                f"<b>[LONGSETUP V2.0 – CONFIRMADO]</b>\n"
+                f"Pair: <b>{symbol}</b>\n"
+                f"Time: {now_br()}\n"
+                f"Price: <b>{fmt_price(close_curr_4h)}</b>\n"
+                f"RSI: <b>{rsi1h[-1]:.1f}</b> | Vol: <b>+{(vol_ratio_4h-1)*100:.0f}%</b>\n"
+                f"Pullback ≤8% | 1D ↑\n"
+                f"<b>Continuidade 4h confirmada</b>\n\n"
+                f"<b>Entrada:</b> {fmt_price(close_curr_4h)}\n"
+                f"<b>SL:</b> {fmt_price(sl_price)} (swing low)\n"
+                f"<b>TP1:</b> {fmt_price(tp1)} (+5%)\n"
+                f"<b>TP2:</b> {fmt_price(tp2)} (+10%)\n"
+                f"<b>TP3:</b> Trailing Stop\n\n"
+                f"<a href='https://www.binance.com/en/trade/{symbol}'>ABRIR NO BINANCE</a>"
+            )
+
+            if await tg(session, msg):
+                mark(symbol, "LONG_ALERT")
+                print(f"ALERTA ENVIADO: {symbol}")
+            else:
+                print(f"ALERTA NÃO ENVIADO (TG falhou): {symbol}")
 
     except Exception as e:
         print(f"[ERRO SCAN] {symbol}: {e}")
@@ -285,7 +271,7 @@ async def scan_symbol(session, symbol):
 # ---------------- MAIN LOOP ----------------
 async def main_loop():
     async with aiohttp.ClientSession() as session:
-        await tg(session, f"<b>BOT LONGSETUP V2.0 INICIADO</b>\n{now_br()}\nFiltros mais inteligentes + SL dinâmico.")
+        await tg(session, f"<b>BOT LONGSETUP V2.0 INICIADO</b>\n{now_br()}\nScanner ativo (sem testes).")
         print(f"[{now_br()}] BOT V2.0 INICIADO | Telegram: {'OK' if TELEGRAM_TOKEN and CHAT_ID else 'NOK'}")
 
         while True:

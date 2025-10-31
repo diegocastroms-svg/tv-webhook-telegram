@@ -30,15 +30,12 @@ def health():
 
 # ---------------- UTILS ----------------
 def now_br():
-    """Retorna hora atual no formato brasileiro."""
     return (datetime.utcnow() - timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S") + " BR"
 
 async def tg(session, text: str):
-    """Envia mensagem ao Telegram."""
     if not TELEGRAM_TOKEN or not CHAT_ID:
         print("[TG FALHOU] Token ou Chat ID ausente!")
         return False
-
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {
         "chat_id": CHAT_ID,
@@ -64,9 +61,7 @@ def fmt_price(x: float) -> str:
     return s if s else "0"
 
 def sma(seq, n):
-    """Média móvel simples."""
-    if len(seq) < n:
-        return [0.0] * len(seq)
+    if len(seq) < n: return [0.0] * len(seq)
     from collections import deque
     out, s, q = [], 0.0, deque()
     for x in seq:
@@ -76,7 +71,6 @@ def sma(seq, n):
     return out
 
 def ema(seq, span):
-    """Média móvel exponencial."""
     if not seq: return []
     alpha = 2.0 / (span + 1.0)
     out, e = [seq[0]], seq[0]
@@ -86,7 +80,6 @@ def ema(seq, span):
     return out
 
 def calc_rsi(seq, period=14):
-    """Calcula RSI."""
     if len(seq) < period + 1:
         return [50.0] * len(seq)
     gains, losses = [], []
@@ -119,7 +112,6 @@ async def get_klines(session, symbol, interval, limit=210):
         return []
 
 async def get_valid_spot_usdt_symbols(session):
-    """Filtra pares SPOT/USDT válidos."""
     try:
         async with session.get(f"{BINANCE_HTTP}/api/v3/exchangeInfo", timeout=REQ_TIMEOUT) as r:
             info = await r.json()
@@ -137,21 +129,21 @@ async def get_valid_spot_usdt_symbols(session):
     return valid
 
 async def get_top_usdt_symbols(session):
-    """Seleciona TOP_N pares por volume."""
     valid = await get_valid_spot_usdt_symbols(session)
     try:
         async with session.get(f"{BINANCE_HTTP}/api/v3/ticker/24hr", timeout=REQ_TIMEOUT) as r:
             data = await r.json()
     except:
         data = []
-    blocked = ("BUSD","FDUSD","TUSD","USDC","BRL","EUR","TRY","TEST")
+    blocked = ("BUSD","FDUSD","TUSD","USDC","USDP","USD1","USDE","XUSD","USDX","GUSD","EUR","EURS","CEUR","BRL","TRY","STABLE","TEST")
     pares = []
     for d in data if isinstance(data, list) else []:
         s = d.get("symbol", "")
         if s not in valid or not s.endswith("USDT"): continue
         if any(x in s for x in blocked): continue
         qv = float(d.get("quoteVolume", "0") or 0.0)
-        if qv >= 15_000_000: pares.append((s, qv))
+        if qv >= 15_000_000:
+            pares.append((s, qv))
     pares.sort(key=lambda x: x[1], reverse=True)
     print(f"[INFO] {len(pares[:TOP_N])} pares USDT válidos (TOP {TOP_N})")
     return [s for s, _ in pares[:TOP_N]]
@@ -166,7 +158,6 @@ def mark(symbol, kind):
 
 # ---------------- WORKER ----------------
 async def scan_symbol(session, symbol):
-    """Executa varredura individual de símbolo."""
     try:
         RSI_MIN, VOL_MIN, PULLBACK_MAX, TOL = 48.0, 1.1, 1.10, 0.99
 
@@ -204,17 +195,14 @@ async def scan_symbol(session, symbol):
         if allowed(symbol, "LONG_ALERT"):
             tp1, tp2 = close_curr * 1.05, close_curr * 1.10
             msg = (
-                f"<b>[LONGSETUP V2.2 – CONFIRMADO]</b>\n"
-                f"Pair: <b>{symbol}</b>\n"
-                f"Time: {now_br()}\n"
-                f"Price: <b>{fmt_price(close_curr)}</b>\n"
-                f"RSI: <b>{rsi1h[-1]:.1f}</b> | Vol: <b>+{(vol_ratio_4h-1)*100:.0f}%</b>\n"
-                f"Pullback ≤8% | 1D ↑ | Continuidade 4h confirmada\n\n"
-                f"<b>Entrada:</b> {fmt_price(close_curr)}\n"
-                f"<b>SL:</b> {fmt_price(sl_price)} (swing low)\n"
-                f"<b>TP1:</b> {fmt_price(tp1)} (+5%)\n"
-                f"<b>TP2:</b> {fmt_price(tp2)} (+10%)\n"
-                f"<b>TP3:</b> Trailing Stop\n\n"
+                f"🚀 <b>[LONGSETUP V2.2 – CONFIRMADO]</b>\n"
+                f"<b>{symbol}</b>\n"
+                f"💰 Preço: {fmt_price(close_curr)}\n"
+                f"📊 RSI: {rsi1h[-1]:.1f} | Volume: +{(vol_ratio_4h-1)*100:.0f}%\n"
+                f"🧭 Pullback ≤8% | 1D ↑ | Continuidade 4h confirmada\n\n"
+                f"🎯 TP1: {fmt_price(tp1)} (+5%)\n"
+                f"🎯 TP2: {fmt_price(tp2)} (+10%)\n"
+                f"🛡️ SL: {fmt_price(sl_price)} (swing low)\n\n"
                 f"<a href='https://www.binance.com/en/trade/{symbol}'>ABRIR NO BINANCE</a>"
             )
             if await tg(session, msg):
@@ -229,7 +217,6 @@ async def main_loop():
     async with aiohttp.ClientSession() as session:
         await tg(session, f"<b>BOT LONGSETUP V2.2 INICIADO</b>\n{now_br()}")
         print(f"[{now_br()}] BOT V2.2 INICIADO | Telegram: {'OK' if TELEGRAM_TOKEN and CHAT_ID else 'NOK'}")
-
         while True:
             start = time.time()
             symbols = await get_top_usdt_symbols(session)
@@ -242,7 +229,7 @@ async def main_loop():
             print(f"[{now_br()}] Scan concluído em {elapsed:.1f}s. Próximo em 5 min...")
             await asyncio.sleep(300)
 
-# ---------------- EXECUÇÃO FINAL (FORÇADA NO BOOT / FLASK 3) ----------------
+# ---------------- EXECUÇÃO FINAL ----------------
 def start_bot():
     while True:
         try:

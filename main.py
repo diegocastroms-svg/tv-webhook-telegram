@@ -2,7 +2,7 @@
 # RSI ≥ 50 | Volume ≥ 1.2x | Pullback ≤ 8%
 # SL dinâmico (swing low) | TP em 3 camadas
 # SEM ALERTA DE TESTE | SÓ ALERTAS REAIS
-# Thread ativa + Flask compatível com Render
+# Thread ativa + Flask compatível com Render (Flask 3+)
 
 import os, asyncio, aiohttp, time, threading
 from datetime import datetime, timedelta
@@ -276,7 +276,7 @@ async def main_loop():
             print(f"[{now_br()}] Scan concluído em {elapsed:.1f}s. Próximo em 5 min...")
             await asyncio.sleep(300)
 
-# ---------------- EXECUÇÃO FINAL (CORRIGIDA DEFINITIVA) ----------------
+# ---------------- EXECUÇÃO FINAL (CORRIGIDA FLASK 3+) ----------------
 def start_bot():
     while True:
         try:
@@ -285,10 +285,10 @@ def start_bot():
             print(f"[ERRO FATAL] {e}. Reiniciando em 5s...")
             time.sleep(5)
 
-@app.before_first_request
-def start_background():
+def run_flask_with_thread():
     threading.Thread(target=start_bot, daemon=True).start()
     print("[INFO] Thread principal do BOT iniciada.")
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT") or 10000))
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT") or 10000))
+    run_flask_with_thread()

@@ -1,8 +1,5 @@
-# main.py — LONGSETUP CONFIRMADO V2.2 (FINAL)
-# RSI ≥ 50 | Volume ≥ 1.2x | Pullback ≤ 8%
-# SL dinâmico (swing low) | TP em 3 camadas
-# SEM ALERTA DE TESTE | SÓ ALERTAS REAIS
-# Totalmente compatível com Flask 3 e Render
+# main.py — LONGSETUP CONFIRMADO V2.2 (FINAL) → TRIPLA CONFIRMAÇÃO + SAÍDA MACD
+# Entrada 1D+4H+1H | Stop 1h | Alvo 1:3 e 1:5 | Saída MACD 1D < 0
 
 import os, asyncio, aiohttp, time, threading
 from datetime import datetime, timedelta
@@ -12,7 +9,7 @@ from flask import Flask
 BINANCE_HTTP = "https://api.binance.com"
 TOP_N = 80
 REQ_TIMEOUT = 10
-COOLDOWN_SEC = 15 * 60  # 15 min
+COOLDOWN_SEC = 15 * 60  # 15 min (mantido do original)
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
 CHAT_ID = os.getenv("CHAT_ID", "").strip()
@@ -100,6 +97,14 @@ def calc_rsi(seq, period=14):
         rsi.append(100 - (100 / (1 + rs)))
     return [50.0] * (len(seq) - len(rsi)) + rsi
 
+def macd_hist(seq):
+    if len(seq) < 35: return 0.0
+    ema_fast = ema(seq, 12)
+    ema_slow = ema(seq, 26)
+    macd_line = [f - s for f, s in zip(ema_fast, ema_slow)]
+    signal = ema(macd_line, 9)
+    return macd_line[-1] - signal[-1] if len(signal) > 0 else 0.0
+
 # ---------------- BINANCE ----------------
 async def get_klines(session, symbol, interval, limit=210):
     url = f"{BINANCE_HTTP}/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
@@ -148,66 +153,111 @@ async def get_top_usdt_symbols(session):
     print(f"[INFO] {len(pares[:TOP_N])} pares USDT válidos (TOP {TOP_N})")
     return [s for s, _ in pares[:TOP_N]]
 
-# ---------------- ALERT STATE ----------------
+# ---------------- ESTADO DE POSIÇÃO E ALERTA ----------------
+POSICOES = {}  # {symbol: {"entry": price, "stop": price, "alvo1": price, "alvo2": price, "ativo": True}}
 LAST_HIT = {}
+
 def allowed(symbol, kind, cd=COOLDOWN_SEC):
     ts = LAST_HIT.get((symbol, kind), 0.0)
     return (time.time() - ts) >= cd
+
 def mark(symbol, kind):
     LAST_HIT[(symbol, kind)] = time.time()
 
-# ---------------- WORKER ----------------
+# ---------------- WORKER (SUBSTITUIÇÃO TOTAL DO ALERTA) ----------------
 async def scan_symbol(session, symbol):
     try:
-        RSI_MIN, VOL_MIN, PULLBACK_MAX, TOL = 48.0, 1.1, 1.10, 0.99
+        # === DADOS 1D ===
+        k1d = await get_klines(session, symbol, "1d", 200)
+        if len(k1d) < 50: return
+        c1d = [float(x[4]) for x in k1d]
+        v1d = [float(x[5]) for x in k1d]
+        close_1d = c1d[-1]
+        ema9_1d = ema(c1d, 9)[-1]
+        ema21_1d = ema(c1d, 21)[-1]
+        ema200_1d = ema(c1d, 200)[-1]
+        rsi_1d = calc_rsi(c1d)[-1]
+        macd_hist_1d = macd_hist(c1d)
+        vol_med_20 = sum(v1d[-20:]) / 20
+        vol_atual = v1d[-1]
 
-        k1h = await get_klines(session, symbol, "1h")
-        k4h = await get_klines(session, symbol, "4h")
-        k1d = await get_klines(session, symbol, "1d")
-        if not (len(k1h) >= 52 and len(k4h) >= 52 and len(k1d) >= 52): return
+        # === DADOS 4H ===
+        k4h = await get_klines(session, symbol, "4h", 100)
+        if len(k4h) < 50: return
+        c4h = [float(x[4]) for x in k4h]
+        ema9_4h = ema(c4h, 9)[-1]
+        ema21_4h = ema(c4h, 21)[-1]
+        ema50_4h = ema(c4h, 50)[-1]
+        macd_hist_4h = macd_hist(c4h)
+        close_4h = c4h[-1]
 
-        c1h, c4h, c1d = [float(x[4]) for x in k1h[:-1]], [float(x[4]) for x in k4h[:-2]], [float(x[4]) for x in k1d[:-1]]
-        v4h = [float(x[5]) for x in k4h[:-2]]
-        rsi1h = calc_rsi(c1h, 14)
-        ma50_4h, ma200_4h = sma(c4h, 50), sma(c4h, 200)
-        vol_ma20_4h = sum(v4h[-21:-1]) / 20.0 if len(v4h) >= 21 else 0.0
-        vol_ratio_4h = v4h[-1] / (vol_ma20_4h + 1e-12)
+        # === DADOS 1H ===
+        k1h = await get_klines(session, symbol, "1h", 100)
+        if len(k1h) < 50: return
+        c1h = [float(x[4]) for x in k1h]
+        ema9_1h = ema(c1h, 9)[-1]
+        ema21_1h = ema(c1h, 21)[-1]
+        ema20_1h = ema(c1h, 20)[-1]
+        macd_hist_1h = macd_hist(c1h)
+        close_1h = c1h[-1]
 
-        high_prev, close_curr, vol_curr, vol_prev = float(k4h[-3][2]), float(k4h[-2][4]), float(k4h[-2][5]), float(k4h[-3][5])
-        continuity = (close_curr > high_prev) and (vol_curr > vol_prev)
+        # === CONDIÇÕES TRIPLA CONFIRMAÇÃO ===
+        cond_1d = (
+            ema9_1d > ema21_1d and
+            close_1d > ema200_1d and
+            45 <= rsi_1d <= 70 and
+            macd_hist_1d > 0 and
+            vol_atual > vol_med_20 * 1.2
+        )
+        conf_4h = sum([ema9_4h > ema21_4h, macd_hist_4h > 0, close_4h > ema50_4h]) >= 2
+        conf_1h = sum([ema9_1h > ema21_1h, macd_hist_1h > 0, close_1h > ema20_1h]) >= 2
 
-        ema20_1d = ema(c1d, 20)
-        swing_low = min(float(x[3]) for x in k4h[-5:-1])
-        sl_price = swing_low * 0.995
+        # === ENTRADA (COM COOLDOWN 15 MIN) ===
+        if cond_1d and conf_4h and conf_1h and allowed(symbol, "TRIPLA"):
+            swing_low = min(float(x[3]) for x in k1h[-5:])
+            stop = swing_low * 0.995
+            risco = close_1h - stop
+            alvo_1 = close_1h + 3 * risco
+            alvo_2 = close_1h + 5 * risco
 
-        conds = [
-            rsi1h[-1] >= RSI_MIN,
-            vol_ratio_4h >= VOL_MIN,
-            ma50_4h[-1] >= ma200_4h[-1] * TOL,
-            close_curr >= ma200_4h[-1] * TOL,
-            close_curr <= ma50_4h[-1] * PULLBACK_MAX,
-            c1d[-1] >= ema20_1d[-1] * TOL,
-            continuity,
-        ]
-        if not all(conds):
-            return
+            POSICOES[symbol] = {
+                "entry": close_1h,
+                "stop": stop,
+                "alvo1": alvo_1,
+                "alvo2": alvo_2,
+                "ativo": True
+            }
 
-        if allowed(symbol, "LONG_ALERT"):
-            tp1, tp2 = close_curr * 1.05, close_curr * 1.10
             msg = (
-                f"🚀 <b>[LONGSETUP V2.2 – CONFIRMADO]</b>\n"
+                f"<b>ENTRADA CONFIRMADA</b>\n"
                 f"<b>{symbol}</b>\n"
-                f"💰 Preço: {fmt_price(close_curr)}\n"
-                f"📊 RSI: {rsi1h[-1]:.1f} | Volume: +{(vol_ratio_4h-1)*100:.0f}%\n"
-                f"🧭 Pullback ≤8% | 1D ↑ | Continuidade 4h confirmada\n\n"
-                f"🎯 TP1: {fmt_price(tp1)} (+5%)\n"
-                f"🎯 TP2: {fmt_price(tp2)} (+10%)\n"
-                f"🛡️ SL: {fmt_price(sl_price)} (swing low)\n\n"
-                f"<a href='https://www.binance.com/en/trade/{symbol}'>ABRIR NO BINANCE</a>"
+                f"Preço: ${fmt_price(close_1h)}\n"
+                f"Stop: ${fmt_price(stop)}\n"
+                f"Alvo 1: ${fmt_price(alvo_1)} (+{((alvo_1/close_1h)-1)*100:.1f}%)\n"
+                f"Alvo 2: ${fmt_price(alvo_2)} (+{((alvo_2/close_1h)-1)*100:.1f}%)\n"
+                f"{now_br()}\n"
+                f"<a href='https://www.binance.com/en/trade/{symbol}'>ABRIR</a>"
             )
             if await tg(session, msg):
-                mark(symbol, "LONG_ALERT")
-                print(f"ALERTA ENVIADO: {symbol}")
+                mark(symbol, "TRIPLA")
+                print(f"ALERTA TRIPLA ENVIADO: {symbol}")
+
+        # === SAÍDA AUTOMÁTICA (MACD 1D VIRA NEGATIVO) ===
+        if symbol in POSICOES and POSICOES[symbol]["ativo"]:
+            if macd_hist_1d <= 0:
+                entry = POSICOES[symbol]["entry"]
+                lucro = ((close_1d - entry) / entry) * 100
+                msg = (
+                    f"<b>SAÍDA AUTOMÁTICA</b>\n"
+                    f"<b>{symbol}</b>\n"
+                    f"Entrada: ${fmt_price(entry)}\n"
+                    f"Saída: ${fmt_price(close_1d)}\n"
+                    f"Lucro: {lucro:+.1f}%\n"
+                    f"Motivo: MACD 1D virou negativo\n"
+                    f"{now_br()}"
+                )
+                if await tg(session, msg):
+                    POSICOES[symbol]["ativo"] = False
 
     except Exception as e:
         print(f"[ERRO SCAN] {symbol}: {e}")

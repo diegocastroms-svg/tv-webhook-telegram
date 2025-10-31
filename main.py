@@ -276,14 +276,15 @@ async def main_loop():
             print(f"[{now_br()}] Scan concluído em {elapsed:.1f}s. Próximo em 5 min...")
             await asyncio.sleep(300)
 
-def start_bot():
-    while True:
-        try:
-            asyncio.run(main_loop())
-        except Exception as e:
-            print(f"[LOOP ERRO] {e}")
-            time.sleep(5)
+# ---------------- EXECUÇÃO FINAL (CORRIGIDA) ----------------
+if __name__ == "__main__":
+    def start_bot():
+        while True:
+            try:
+                asyncio.run(main_loop())
+            except Exception as e:
+                print(f"[ERRO FATAL] {e}. Reiniciando em 5s...")
+                time.sleep(5)
 
-threading.Thread(target=start_bot, daemon=True).start()
-app.run(host="0.0.0.0", port=int(os.getenv("PORT") or 10000))
-
+    threading.Thread(target=start_bot, daemon=True).start()
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT") or 10000))

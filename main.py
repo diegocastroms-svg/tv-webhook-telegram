@@ -1,4 +1,4 @@
-# main.py — LONGSETUP CONFIRMADO V2.2 (FINAL CORRIGIDO)
+# main.py — LONGSETUP CONFIRMADO V2.2 (FINAL CORRIGIDO LIMPO)
 # Entrada 1D+4H+1H | Stop 1h | Alvo 1:3 e 1:5 | Saída MACD 1D < 0
 
 import os, asyncio, aiohttp, time, threading
@@ -9,8 +9,8 @@ from flask import Flask
 BINANCE_HTTP = "https://api.binance.com"
 TOP_N = 80
 REQ_TIMEOUT = 10
-COOLDOWN_SEC = 15 * 60  # 15 min (mantido do original)
-VOL_MIN_USDT = 20_000_000  # 🔹 Ajuste: volume mínimo reduzido
+COOLDOWN_SEC = 15 * 60
+VOL_MIN_USDT = 20_000_000  # volume mínimo reduzido
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
 CHAT_ID = os.getenv("CHAT_ID", "").strip()
@@ -174,7 +174,7 @@ async def scan_symbol(session, symbol):
         cond_1d = (
             ema9_1d > ema21_1d and
             close_1d > ema200_1d and
-            40 <= rsi_1d <= 70 and  # 🔹 RSI ajustado
+            40 <= rsi_1d <= 70 and
             macd_hist_1d > 0 and
             vol_atual > vol_med_20 * 1.2
         )

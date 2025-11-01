@@ -1,5 +1,10 @@
-# main.py — LONGSETUP CONFIRMADO V2.2 (FINAL) → TRIPLA CONFIRMAÇÃO + SAÍDA MACD
-# Entrada 1D+4H+1H | Stop 1h | Alvo 1:3 e 1:5 | Saída MACD 1D < 0
+# main_long_v1.py — TENDÊNCIA LONGA OURO
+# 15m e 30m: EMA9 cruza acima da EMA20 + RSI 45–70
+# 1h e 4h: MACD hist > 0
+# Volume 30m (USDT) ≥ 30M
+# Cooldown 30 min
+# Alerta com moldura, tudo em negrito, alvos em %
+# Taxa de acerto dinâmica (últimas 50 operações)
 
 import os, asyncio, aiohttp, time, threading
 from datetime import datetime, timedelta
@@ -9,7 +14,9 @@ from flask import Flask
 BINANCE_HTTP = "https://api.binance.com"
 TOP_N = 80
 REQ_TIMEOUT = 10
-COOLDOWN_SEC = 15 * 60  # 15 min (mantido do original)
+COOLDOWN_SEC = 30 * 60  # 30 min
+VOL_30M_MIN_USDT = 30_000_000
+WINRATE_WINDOW = 50
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
 CHAT_ID = os.getenv("CHAT_ID", "").strip()
@@ -19,7 +26,7 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "Scanner ativo (LongSetup V2.2) — Tendência Longa 1h/4h/1D", 200
+    return "Scanner ativo — TENDÊNCIA LONGA OURO (15m/30m cruzamento + RSI | 1h/4h MACD)", 200
 
 @app.route("/health")
 def health():
@@ -31,8 +38,8 @@ def now_br():
 
 async def tg(session, text: str):
     if not TELEGRAM_TOKEN or not CHAT_ID:
-        print("[TG FALHOU] Token ou Chat ID ausente!")
-        return False
+        print("[TG] (simulado) " + text.replace("\n", " ")[:160])
+        return True
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {
         "chat_id": CHAT_ID,
@@ -41,14 +48,11 @@ async def tg(session, text: str):
         "disable_web_page_preview": True,
     }
     try:
-        async with session.post(url, data=payload, timeout=10) as resp:
-            data = await resp.json()
-            if resp.status == 200 and data.get("ok"):
-                print(f"[TG ENVIADO] {text.split(chr(10))[0]}...")
-                return True
-            else:
-                print(f"[TG ERRO] {resp.status} | {data.get('description', '')}")
-                return False
+        async with session.post(url, data=payload, timeout=REQ_TIMEOUT) as resp:
+            ok = (resp.status == 200)
+            if not ok:
+                print(f"[TG ERRO] status={resp.status}")
+            return ok
     except Exception as e:
         print(f"[TG EXCEÇÃO] {e}")
         return False
@@ -57,15 +61,9 @@ def fmt_price(x: float) -> str:
     s = f"{x:.8f}".rstrip("0").rstrip(".")
     return s if s else "0"
 
-def sma(seq, n):
-    if len(seq) < n: return [0.0] * len(seq)
-    from collections import deque
-    out, s, q = [], 0.0, deque()
-    for x in seq:
-        q.append(x); s += x
-        if len(q) > n: s -= q.popleft()
-        out.append(s / len(q))
-    return out
+def pct(a, b) -> float:
+    if b == 0: return 0.0
+    return (a/b - 1.0) * 100.0
 
 def ema(seq, span):
     if not seq: return []
@@ -76,34 +74,42 @@ def ema(seq, span):
         out.append(e)
     return out
 
+def macd_hist_series(seq, fast=12, slow=26, signal=9):
+    if len(seq) < slow + signal + 1:
+        return [0.0] * len(seq)
+    ef, es = ema(seq, fast), ema(seq, slow)
+    macd_line = [f - s for f, s in zip(ef, es)]
+    sig = ema(macd_line, signal)
+    m = len(macd_line); s = len(sig)
+    if s < m:
+        sig = [sig[0]] * (m - s) + sig
+    return [m_ - s_ for m_, s_ in zip(macd_line, sig)]
+
 def calc_rsi(seq, period=14):
-    if len(seq) < period + 1:
-        return [50.0] * len(seq)
+    n = len(seq)
+    if n < period + 1: return [50.0]*n
     gains, losses = [], []
-    for i in range(1, len(seq)):
-        diff = seq[i] - seq[i - 1]
-        gains.append(max(diff, 0))
-        losses.append(abs(min(diff, 0)))
-    rsi, avg_gain = [], sum(gains[:period]) / period
+    for i in range(1, n):
+        d = seq[i] - seq[i-1]
+        gains.append(max(d, 0))
+        losses.append(abs(min(d, 0)))
+    rsis = []
+    avg_gain = sum(gains[:period]) / period
     avg_loss = sum(losses[:period]) / period
     rs = avg_gain / (avg_loss + 1e-12)
-    rsi.append(100 - (100 / (1 + rs)))
-    for i in range(period, len(seq) - 1):
-        diff = seq[i] - seq[i - 1]
-        gain, loss = max(diff, 0), abs(min(diff, 0))
-        avg_gain = (avg_gain * (period - 1) + gain) / period
-        avg_loss = (avg_loss * (period - 1) + loss) / period
+    rsis.append(100 - (100/(1+rs)))
+    for i in range(period, n-1):
+        d = seq[i] - seq[i-1]
+        g = max(d, 0)
+        l = abs(min(d, 0))
+        avg_gain = (avg_gain*(period-1) + g) / period
+        avg_loss = (avg_loss*(period-1) + l) / period
         rs = avg_gain / (avg_loss + 1e-12)
-        rsi.append(100 - (100 / (1 + rs)))
-    return [50.0] * (len(seq) - len(rsi)) + rsi
+        rsis.append(100 - (100/(1+rs)))
+    return [50.0]*(n-len(rsis)) + rsis
 
-def macd_hist(seq):
-    if len(seq) < 35: return 0.0
-    ema_fast = ema(seq, 12)
-    ema_slow = ema(seq, 26)
-    macd_line = [f - s for f, s in zip(ema_fast, ema_slow)]
-    signal = ema(macd_line, 9)
-    return macd_line[-1] - signal[-1] if len(signal) > 0 else 0.0
+def cruzou_up(e9_prev, e20_prev, e9_now, e20_now) -> bool:
+    return e9_prev <= e20_prev and e9_now > e20_now
 
 # ---------------- BINANCE ----------------
 async def get_klines(session, symbol, interval, limit=210):
@@ -153,111 +159,124 @@ async def get_top_usdt_symbols(session):
     print(f"[INFO] {len(pares[:TOP_N])} pares USDT válidos (TOP {TOP_N})")
     return [s for s, _ in pares[:TOP_N]]
 
-# ---------------- ESTADO DE POSIÇÃO E ALERTA ----------------
-POSICOES = {}  # {symbol: {"entry": price, "stop": price, "alvo1": price, "alvo2": price, "ativo": True}}
-LAST_HIT = {}
+# ---------------- ESTADO ----------------
+LAST_HIT = {}               # cooldown por símbolo
+POSITIONS = {}              # {symbol: {"entry","stop","alvo1","alvo2","active":bool}}
+RESULTS = []                # lista de bools (True=win, False=loss), últimas N operações
 
-def allowed(symbol, kind, cd=COOLDOWN_SEC):
-    ts = LAST_HIT.get((symbol, kind), 0.0)
+def allowed(symbol, cd=COOLDOWN_SEC):
+    ts = LAST_HIT.get(symbol, 0.0)
     return (time.time() - ts) >= cd
 
-def mark(symbol, kind):
-    LAST_HIT[(symbol, kind)] = time.time()
+def mark(symbol):
+    LAST_HIT[symbol] = time.time()
 
-# ---------------- WORKER (SUBSTITUIÇÃO TOTAL DO ALERTA) ----------------
+def winrate() -> float:
+    if not RESULTS: return 0.0
+    base = RESULTS[-WINRATE_WINDOW:]
+    return (sum(1 for r in base if r) / len(base)) * 100.0
+
+def push_result(ok: bool):
+    RESULTS.append(ok)
+    if len(RESULTS) > 1000:
+        del RESULTS[:len(RESULTS)-1000]
+
+# ---------------- WORKER ----------------
 async def scan_symbol(session, symbol):
     try:
-        # === DADOS 1D ===
-        k1d = await get_klines(session, symbol, "1d", 200)
-        if len(k1d) < 50: return
-        c1d = [float(x[4]) for x in k1d]
-        v1d = [float(x[5]) for x in k1d]
-        close_1d = c1d[-1]
-        ema9_1d = ema(c1d, 9)[-1]
-        ema21_1d = ema(c1d, 21)[-1]
-        ema200_1d = ema(c1d, 200)[-1]
-        rsi_1d = calc_rsi(c1d)[-1]
-        macd_hist_1d = macd_hist(c1d)
-        vol_med_20 = sum(v1d[-20:]) / 20
-        vol_atual = v1d[-1]
+        # 15m, 30m, 1h, 4h
+        k15 = await get_klines(session, symbol, "15m", 120)
+        k30 = await get_klines(session, symbol, "30m", 120)
+        k1h = await get_klines(session, symbol, "1h", 120)
+        k4h = await get_klines(session, symbol, "4h", 120)
+        if not (k15 and k30 and k1h and k4h): return
 
-        # === DADOS 4H ===
-        k4h = await get_klines(session, symbol, "4h", 100)
-        if len(k4h) < 50: return
-        c4h = [float(x[4]) for x in k4h]
-        ema9_4h = ema(c4h, 9)[-1]
-        ema21_4h = ema(c4h, 21)[-1]
-        ema50_4h = ema(c4h, 50)[-1]
-        macd_hist_4h = macd_hist(c4h)
-        close_4h = c4h[-1]
-
-        # === DADOS 1H ===
-        k1h = await get_klines(session, symbol, "1h", 100)
-        if len(k1h) < 50: return
+        # ---- SERIES ----
+        c15 = [float(x[4]) for x in k15]
+        c30 = [float(x[4]) for x in k30]
         c1h = [float(x[4]) for x in k1h]
-        ema9_1h = ema(c1h, 9)[-1]
-        ema21_1h = ema(c1h, 21)[-1]
-        ema20_1h = ema(c1h, 20)[-1]
-        macd_hist_1h = macd_hist(c1h)
-        close_1h = c1h[-1]
+        c4h = [float(x[4]) for x in k4h]
+        l30 = [float(x[3]) for x in k30]
+        # quote volume 30m (kline col 7)
+        qv30_last = float(k30[-1][7]) if len(k30[-1]) > 7 else 0.0
 
-        # === CONDIÇÕES TRIPLA CONFIRMAÇÃO ===
-        cond_1d = (
-            ema9_1d > ema21_1d and
-            close_1d > ema200_1d and
-            45 <= rsi_1d <= 70 and
-            macd_hist_1d > 0 and
-            vol_atual > vol_med_20 * 1.2
+        # ---- INDICADORES (fechados) ----
+        # 15m cruzamento + RSI
+        e9_15, e20_15 = ema(c15, 9), ema(c15, 20)
+        cruz_15 = len(e9_15) >= 2 and len(e20_15) >= 2 and cruzou_up(e9_15[-2], e20_15[-2], e9_15[-1], e20_15[-1])
+        rsi15 = calc_rsi(c15, 14)[-1] if len(c15) else 50.0
+
+        # 30m cruzamento + RSI
+        e9_30, e20_30 = ema(c30, 9), ema(c30, 20)
+        cruz_30 = len(e9_30) >= 2 and len(e20_30) >= 2 and cruzou_up(e9_30[-2], e20_30[-2], e9_30[-1], e20_30[-1])
+        rsi30 = calc_rsi(c30, 14)[-1] if len(c30) else 50.0
+
+        # 1h e 4h: MACD verde
+        h1h = macd_hist_series(c1h)
+        h4h = macd_hist_series(c4h)
+        macd1h_pos = (len(h1h) > 0 and h1h[-1] > 0)
+        macd4h_pos = (len(h4h) > 0 and h4h[-1] > 0)
+
+        # ---- REGRAS DO ALERTA LONGO ----
+        cond = (
+            cruz_15 and 45 <= rsi15 <= 70 and
+            cruz_30 and 45 <= rsi30 <= 70 and
+            macd1h_pos and
+            macd4h_pos and
+            qv30_last >= VOL_30M_MIN_USDT
         )
-        conf_4h = sum([ema9_4h > ema21_4h, macd_hist_4h > 0, close_4h > ema50_4h]) >= 2
-        conf_1h = sum([ema9_1h > ema21_1h, macd_hist_1h > 0, close_1h > ema20_1h]) >= 2
 
-        # === ENTRADA (COM COOLDOWN 15 MIN) ===
-        if cond_1d and conf_4h and conf_1h and allowed(symbol, "TRIPLA"):
-            swing_low = min(float(x[3]) for x in k1h[-5:])
-            stop = swing_low * 0.995
-            risco = close_1h - stop
-            alvo_1 = close_1h + 3 * risco
-            alvo_2 = close_1h + 5 * risco
+        # ---- RESOLUÇÃO DE POSIÇÕES ABERTAS (ganho/perda) ----
+        # Usa a vela mais recente de 30m para avaliar stop/alvos
+        if symbol in POSITIONS and POSITIONS[symbol]["active"]:
+            entry = POSITIONS[symbol]["entry"]
+            stop = POSITIONS[symbol]["stop"]
+            alvo1 = POSITIONS[symbol]["alvo1"]
+            # preços da última vela de 30m
+            high30 = float(k30[-1][2]); low30 = float(k30[-1][3]); close30 = float(k30[-1][4])
+            # Verifica primeiro alvo1, depois stop
+            if high30 >= alvo1:
+                push_result(True)
+                POSITIONS[symbol]["active"] = False
+            elif low30 <= stop:
+                push_result(False)
+                POSITIONS[symbol]["active"] = False
+            # (alvo2 é apenas informativo para take total)
 
-            POSICOES[symbol] = {
-                "entry": close_1h,
-                "stop": stop,
-                "alvo1": alvo_1,
-                "alvo2": alvo_2,
-                "ativo": True
-            }
+        # ---- DISPARO DO ALERTA ----
+        if cond and allowed(symbol, COOLDOWN_SEC):
+            preco = float(k30[-1][4])
+            # stop: proteção sob mínima da vela anterior e EMA21(30m)
+            ema21_30 = ema(c30, 21)[-1] if len(c30) >= 21 else c30[-1]
+            stop = min(l30[-2], ema21_30) if len(l30) >= 2 else ema21_30
+            risco = max(preco - stop, 1e-12)
+            alvo1 = preco + 2.5 * risco
+            alvo2 = preco + 5.0 * risco
+
+            POSITIONS[symbol] = {"entry": preco, "stop": stop, "alvo1": alvo1, "alvo2": alvo2, "active": True}
+
+            liq_text = f"US$ {qv30_last/1_000_000:.1f}M"
+            acerto = winrate()
 
             msg = (
-                f"<b>ENTRADA CONFIRMADA</b>\n"
+                "──────────────────────────────\n"
+                f"🟩📈 <b>TENDÊNCIA LONGA CONFIRMADA</b>\n"
                 f"<b>{symbol}</b>\n"
-                f"Preço: ${fmt_price(close_1h)}\n"
-                f"Stop: ${fmt_price(stop)}\n"
-                f"Alvo 1: ${fmt_price(alvo_1)} (+{((alvo_1/close_1h)-1)*100:.1f}%)\n"
-                f"Alvo 2: ${fmt_price(alvo_2)} (+{((alvo_2/close_1h)-1)*100:.1f}%)\n"
-                f"{now_br()}\n"
-                f"<a href='https://www.binance.com/en/trade/{symbol}'>ABRIR</a>"
+                f"<b>15m✅ 30m✅ 1h✅ 4h✅</b>\n"
+                f"<b>RSI15: {rsi15:.1f} | RSI30: {rsi30:.1f}</b>\n"
+                f"<b>Liquidez (30m): {liq_text}</b>\n"
+                f"<b>Taxa de acerto (últ. {min(len(RESULTS), WINRATE_WINDOW) or 0}): {acerto:.1f}% 📊</b>\n\n"
+                f"<b>💰 Preço:</b> {fmt_price(preco)}\n"
+                f"<b>🛡️ Stop:</b> {fmt_price(stop)}\n"
+                f"<b>🎯 Alvo1:</b> {fmt_price(alvo1)} (+{pct(alvo1, preco):.1f}%)\n"
+                f"<b>🎯 Alvo2:</b> {fmt_price(alvo2)} (+{pct(alvo2, preco):.1f}%)\n"
+                f"<b>💫 Parcial:</b> {fmt_price(preco + (preco - stop))} (+{pct(preco + (preco - stop), preco):.1f}%)\n\n"
+                f"<b>⏰ {now_br()}</b>\n"
+                "──────────────────────────────"
             )
-            if await tg(session, msg):
-                mark(symbol, "TRIPLA")
-                print(f"ALERTA TRIPLA ENVIADO: {symbol}")
-
-        # === SAÍDA AUTOMÁTICA (MACD 1D VIRA NEGATIVO) ===
-        if symbol in POSICOES and POSICOES[symbol]["ativo"]:
-            if macd_hist_1d <= 0:
-                entry = POSICOES[symbol]["entry"]
-                lucro = ((close_1d - entry) / entry) * 100
-                msg = (
-                    f"<b>SAÍDA AUTOMÁTICA</b>\n"
-                    f"<b>{symbol}</b>\n"
-                    f"Entrada: ${fmt_price(entry)}\n"
-                    f"Saída: ${fmt_price(close_1d)}\n"
-                    f"Lucro: {lucro:+.1f}%\n"
-                    f"Motivo: MACD 1D virou negativo\n"
-                    f"{now_br()}"
-                )
-                if await tg(session, msg):
-                    POSICOES[symbol]["ativo"] = False
+            ok = await tg(session, msg)
+            if ok:
+                mark(symbol)
 
     except Exception as e:
         print(f"[ERRO SCAN] {symbol}: {e}")
@@ -265,8 +284,7 @@ async def scan_symbol(session, symbol):
 # ---------------- MAIN LOOP ----------------
 async def main_loop():
     async with aiohttp.ClientSession() as session:
-        await tg(session, f"<b>BOT LONGSETUP V2.2 INICIADO</b>\n{now_br()}")
-        print(f"[{now_br()}] BOT V2.2 INICIADO | Telegram: {'OK' if TELEGRAM_TOKEN and CHAT_ID else 'NOK'}")
+        await tg(session, f"<b>BOT LONGA OURO INICIADO</b>\n<b>Cooldown:</b> 30m | <b>Vol 30m min:</b> US$ {VOL_30M_MIN_USDT/1_000_000:.0f}M\n<b>{now_br()}</b>")
         while True:
             start = time.time()
             symbols = await get_top_usdt_symbols(session)
@@ -276,10 +294,10 @@ async def main_loop():
             print(f"[{now_br()}] Escaneando {len(symbols)} pares...")
             await asyncio.gather(*[scan_symbol(session, s) for s in symbols])
             elapsed = time.time() - start
-            print(f"[{now_br()}] Scan concluído em {elapsed:.1f}s. Próximo em 5 min...")
-            await asyncio.sleep(300)
+            print(f"[{now_br()}] Scan concluído em {elapsed:.1f}s. Próximo em 60s...")
+            await asyncio.sleep(60)
 
-# ---------------- EXECUÇÃO FINAL ----------------
+# ---------------- EXECUÇÃO ----------------
 def start_bot():
     while True:
         try:
@@ -289,10 +307,12 @@ def start_bot():
             time.sleep(5)
 
 def run_flask_with_thread():
-    print("[INFO] Inicializando BOT LONGSETUP V2.2...")
+    print("[INFO] Inicializando BOT LONGA OURO...")
     t = threading.Thread(target=start_bot, daemon=True)
     t.start()
     print("[INFO] Thread principal do BOT iniciada.")
     app.run(host="0.0.0.0", port=int(os.getenv("PORT") or 10000))
 
-run_flask_with_thread()
+if __name__ == "__main__":
+    run_flask_with_thread()
+```0

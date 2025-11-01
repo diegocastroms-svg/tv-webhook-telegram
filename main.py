@@ -1,5 +1,5 @@
-# main.py — LONGSETUP CONFIRMADO V2.2 (FINAL CORRIGIDO COM LOGS - 15m/1h/4h)
-# Entrada 15m + 4H + 1H | Stop 1h | Alvo 1:3 e 1:5 | Saída MACD 15m < 0
+# main.py — LONGSETUP V2.4 (SÓ ALERTA LONGO - 1 DIA+)
+# Entrada 15m + 4H + 1H | Stop 1h | Alvo 1:3 e 1:5 | SEM SAÍDA AUTOMÁTICA
 
 import os, asyncio, aiohttp, time, threading
 from datetime import datetime, timedelta
@@ -9,8 +9,8 @@ from flask import Flask
 BINANCE_HTTP = "https://api.binance.com"
 TOP_N = 80
 REQ_TIMEOUT = 10
-COOLDOWN_SEC = 15 * 60  # 15 min (mantido)
-VOL_MIN_USDT = 20_000_000  # volume mínimo reduzido
+COOLDOWN_SEC = 15 * 60
+VOL_MIN_USDT = 20_000_000
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
 CHAT_ID = os.getenv("CHAT_ID", "").strip()
@@ -20,7 +20,7 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "Scanner ativo (LongSetup V2.2) — Tendência Longa 15m/1h/4h", 200
+    return "Scanner ativo (LongSetup V2.4) — Tendência Longa 15m/1h/4h", 200
 
 @app.route("/health")
 def health():
@@ -28,7 +28,7 @@ def health():
 
 # ---------------- UTILS ----------------
 def now_br():
-    return (datetime.utcnow() - timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S") + " BR"
+    return (datetime.utcnow() - timedelta(hours=3)).strftime("%Y-%m-%d %H:%M") + " BR"
 
 async def tg(session, text: str):
     if not TELEGRAM_TOKEN or not CHAT_ID:
@@ -115,11 +115,10 @@ async def get_top_usdt_symbols(session):
             pares.append((s, qv))
     pares.sort(key=lambda x: x[1], reverse=True)
     only = [s for s, _ in pares[:TOP_N]]
-    print(f"[{now_br()}] TOP {len(only)} pares USDT por volume (>= {VOL_MIN_USDT/1_000_000:.0f}M USDT 24h): {', '.join(only)}")
+    print(f"[{now_br()}] TOP {len(only)} pares USDT por volume")
     return only
 
 # ---------------- ESTADO ----------------
-POSICOES = {}
 LAST_HIT = {}
 
 def allowed(symbol, kind, cd=COOLDOWN_SEC):
@@ -145,6 +144,7 @@ async def scan_symbol(session, symbol):
         macd_hist_15 = macd_hist(c15)
         vol_med_20_15 = sum(v15[-20:]) / 20
         vol_atual_15 = v15[-1]
+        vol_ratio = vol_atual_15 / (vol_med_20_15 + 1e-6)
 
         # === CONFIRMAÇÕES 4H e 1H ===
         k4h = await get_klines(session, symbol, "4h", 100)
@@ -175,7 +175,7 @@ async def scan_symbol(session, symbol):
         conf_4h = sum([ema9_4h > ema21_4h, macd_hist_4h > 0, close_4h > ema50_4h]) >= 2
         conf_1h = sum([ema9_1h > ema21_1h, macd_hist_1h > 0]) >= 2
 
-        # === ENTRADA (STOP em 1h) ===
+        # === ENTRADA (SÓ ALERTA LONGO) ===
         if cond_15m and conf_4h and conf_1h and allowed(symbol, "TRIPLA"):
             swing_low = min(float(x[3]) for x in k1h[-5:])
             stop = swing_low * 0.995
@@ -183,39 +183,41 @@ async def scan_symbol(session, symbol):
             alvo_1 = close_1h + 3 * risco
             alvo_2 = close_1h + 5 * risco
 
-            POSICOES[symbol] = {"entry": close_1h, "stop": stop, "alvo1": alvo_1, "alvo2": alvo_2, "ativo": True}
+            # === PROBABILIDADE E TEMPO ===
+            prob = 70
+            if vol_ratio > 3.0: prob += 20
+            elif vol_ratio > 2.0: prob += 15
+            elif vol_ratio > 1.5: prob += 10
+            if rsi_15 < 50: prob += 10
+            if macd_hist_15 > macd_hist(c15[-10:]): prob += 8
+            prob = min(98, prob)
 
+            if prob >= 90:
+                tempo = "1-3 DIAS"
+                emoji = "ROCKET"
+            elif prob >= 80:
+                tempo = "3-7 DIAS"
+                emoji = "FIRE"
+            else:
+                tempo = "7-14 DIAS"
+                emoji = "UP"
+
+            # === ALERTA LONGO (SÓ ENTRADA) ===
             msg = (
-                "<b>━━━━━━━━━━━━━━━</b>\n"
-                "<b>TENDÊNCIA LONGA CONFIRMADA</b>\n"
-                f"<b>{symbol}</b>\n"
-                f"Preço: ${fmt_price(close_1h)}\n"
-                f"Stop: ${fmt_price(stop)}\n"
-                f"Alvo 1: ${fmt_price(alvo_1)} (+{((alvo_1/close_1h)-1)*100:.1f}%)\n"
-                f"Alvo 2: ${fmt_price(alvo_2)} (+{((alvo_2/close_1h)-1)*100:.1f}%)\n"
-                f"{now_br()}\n"
-                "<b>━━━━━━━━━━━━━━━</b>"
+                f"<b>{emoji} TENDÊNCIA LONGA CONFIRMADA</b>\n"
+                f"<code>{symbol}</code>\n"
+                f"Preço: <b>${fmt_price(close_1h)}</b>\n"
+                f"<b>PROBABILIDADE: {prob}%</b>\n"
+                f"<b>TEMPO ESTIMADO: {tempo}</b>\n"
+                f"Stop: <b>${fmt_price(stop)}</b>\n"
+                f"Alvo 1: <b>${fmt_price(alvo_1)}</b> (+{((alvo_1/close_1h)-1)*100:.1f}%)\n"
+                f"Alvo 2: <b>${fmt_price(alvo_2)}</b> (+{((alvo_2/close_1h)-1)*100:.1f}%)\n"
+                f"<i>{now_br()}</i>\n"
+                f"<b>━━━━━━━━━━━━━━━</b>"
             )
             if await tg(session, msg):
                 mark(symbol, "TRIPLA")
-                print(f"[ALERTA ENVIADO] {symbol}")
-
-        # === SAÍDA AUTOMÁTICA (MACD 15m vira negativo) ===
-        if symbol in POSICOES and POSICOES[symbol]["ativo"]:
-            if macd_hist_15 <= 0:
-                entry = POSICOES[symbol]["entry"]
-                lucro = ((close_15 - entry) / entry) * 100
-                msg = (
-                    "<b>SAÍDA AUTOMÁTICA</b>\n"
-                    f"<b>{symbol}</b>\n"
-                    f"Entrada: ${fmt_price(entry)}\n"
-                    f"Saída: ${fmt_price(close_15)}\n"
-                    f"Lucro: {lucro:+.1f}%\n"
-                    f"Motivo: MACD 15m virou negativo\n"
-                    f"{now_br()}"
-                )
-                if await tg(session, msg):
-                    POSICOES[symbol]["ativo"] = False
+                print(f"[ALERTA LONGO] {symbol} | {prob}% | {tempo}")
 
     except Exception as e:
         print(f"[ERRO SCAN] {symbol}: {e}")
@@ -223,40 +225,36 @@ async def scan_symbol(session, symbol):
 # ---------------- MAIN LOOP ----------------
 async def main_loop():
     async with aiohttp.ClientSession() as session:
-        await tg(session, f"<b>BOT LONGSETUP V2.2 INICIADO</b>\n{now_br()}")
-        print(f"[{now_br()}] BOT V2.2 INICIADO (15m/1h/4h)")
+        await tg(session, f"<b>LONGSETUP V2.4 ATIVO</b>\nTendência longa (SÓ ALERTA DE ENTRADA)\n{now_br()}")
+        print(f"[{now_br()}] BOT V2.4 INICIADO (SÓ ALERTA LONGO)")
 
         while True:
             start = time.time()
             symbols = await get_top_usdt_symbols(session)
             if not symbols:
-                print(f"[{now_br()}] Nenhum par disponível. Aguardando 30s...")
+                print(f"[{now_br()}] Nenhum par. Aguardando...")
                 await asyncio.sleep(30)
                 continue
 
-            # Logs visíveis no Render para confirmar monitoramento
             print(f"[{now_br()}] Escaneando {len(symbols)} pares...")
-            print(f"[{now_br()}] PARES MONITORADOS: {', '.join(symbols)}")
-
             await asyncio.gather(*[scan_symbol(session, s) for s in symbols])
             elapsed = time.time() - start
-            print(f"[{now_br()}] Scan concluído em {elapsed:.1f}s. Próximo ciclo em 5 min...")
+            print(f"[{now_br()}] Scan em {elapsed:.1f}s. Próximo em 5 min...")
             await asyncio.sleep(300)
 
-# ---------------- EXECUÇÃO FINAL ----------------
+# ---------------- EXECUÇÃO ----------------
 def start_bot():
     while True:
         try:
             asyncio.run(main_loop())
         except Exception as e:
-            print(f"[ERRO FATAL] {e}. Reiniciando em 5s...")
+            print(f"[ERRO FATAL] {e}. Reiniciando...")
             time.sleep(5)
 
 def run_flask_with_thread():
-    print("[INFO] Inicializando BOT LONGSETUP V2.2...")
+    print("[INFO] Iniciando LONGSETUP V2.4...")
     t = threading.Thread(target=start_bot, daemon=True)
     t.start()
-    print("[INFO] Thread principal do BOT iniciada.")
     app.run(host="0.0.0.0", port=int(os.getenv("PORT") or 10000))
 
 run_flask_with_thread()

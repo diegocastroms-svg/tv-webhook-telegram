@@ -1,4 +1,4 @@
-# main.py — LONGSETUP CONFIRMADO V2.2 (LOG REATIVADO)
+# main.py — LONGSETUP CONFIRMADO V2.2 (FINAL CORRIGIDO COM LOGS)
 # Entrada 1D+4H+1H | Stop 1h | Alvo 1:3 e 1:5 | Saída MACD 1D < 0
 
 import os, asyncio, aiohttp, time, threading
@@ -9,8 +9,8 @@ from flask import Flask
 BINANCE_HTTP = "https://api.binance.com"
 TOP_N = 80
 REQ_TIMEOUT = 10
-COOLDOWN_SEC = 15 * 60
-VOL_MIN_USDT = 20_000_000
+COOLDOWN_SEC = 15 * 60  # 15 min (mantido do original)
+VOL_MIN_USDT = 20_000_000  # volume mínimo reduzido
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
 CHAT_ID = os.getenv("CHAT_ID", "").strip()
@@ -35,12 +35,7 @@ async def tg(session, text: str):
         print("[TG FALHOU] Token ou Chat ID ausente!")
         return False
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": CHAT_ID,
-        "text": text,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": True,
-    }
+    payload = {"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}
     try:
         async with session.post(url, data=payload, timeout=10) as resp:
             data = await resp.json()
@@ -68,8 +63,7 @@ def ema(seq, span):
     return out
 
 def calc_rsi(seq, period=14):
-    if len(seq) < period + 1:
-        return [50.0] * len(seq)
+    if len(seq) < period + 1: return [50.0] * len(seq)
     gains, losses = [], []
     for i in range(1, len(seq)):
         diff = seq[i] - seq[i - 1]
@@ -199,7 +193,7 @@ async def scan_symbol(session, symbol):
             )
             if await tg(session, msg):
                 mark(symbol, "TRIPLA")
-                print(f"[{now_br()}] ALERTA TRIPLA ENVIADO: {symbol}")
+                print(f"[ALERTA ENVIADO] {symbol}")
 
     except Exception as e:
         print(f"[ERRO SCAN] {symbol}: {e}")
@@ -210,9 +204,16 @@ async def main_loop():
         await tg(session, f"<b>BOT LONGSETUP V2.2 INICIADO</b>\n{now_br()}")
         print(f"[{now_br()}] BOT V2.2 INICIADO")
         while True:
+            start = time.time()
             symbols = await get_top_usdt_symbols(session)
-            print(f"[{now_br()}] Monitorando {len(symbols)} pares USDT: {symbols[:10]} ...")  # ✅ linha reativada
+            if not symbols:
+                print(f"[{now_br()}] Nenhum par disponível. Aguardando 30s...")
+                await asyncio.sleep(30)
+                continue
+            print(f"[{now_br()}] Escaneando {len(symbols)} pares...")
             await asyncio.gather(*[scan_symbol(session, s) for s in symbols])
+            elapsed = time.time() - start
+            print(f"[{now_br()}] Scan concluído em {elapsed:.1f}s. Próximo ciclo em 5 min...")
             await asyncio.sleep(300)
 
 # ---------------- EXECUÇÃO FINAL ----------------

@@ -1,4 +1,4 @@
-# main.py — LONGSETUP CONFIRMADO V2.2 (FINAL CORRIGIDO LIMPO)
+# main.py — LONGSETUP CONFIRMADO V2.2 (LOG REATIVADO)
 # Entrada 1D+4H+1H | Stop 1h | Alvo 1:3 e 1:5 | Saída MACD 1D < 0
 
 import os, asyncio, aiohttp, time, threading
@@ -10,7 +10,7 @@ BINANCE_HTTP = "https://api.binance.com"
 TOP_N = 80
 REQ_TIMEOUT = 10
 COOLDOWN_SEC = 15 * 60
-VOL_MIN_USDT = 20_000_000  # volume mínimo reduzido
+VOL_MIN_USDT = 20_000_000
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
 CHAT_ID = os.getenv("CHAT_ID", "").strip()
@@ -137,7 +137,6 @@ def mark(symbol, kind):
 # ---------------- WORKER ----------------
 async def scan_symbol(session, symbol):
     try:
-        # === DADOS 1D ===
         k1d = await get_klines(session, symbol, "1d", 200)
         if len(k1d) < 50: return
         c1d = [float(x[4]) for x in k1d]
@@ -151,7 +150,6 @@ async def scan_symbol(session, symbol):
         vol_med_20 = sum(v1d[-20:]) / 20
         vol_atual = v1d[-1]
 
-        # === DADOS 4H ===
         k4h = await get_klines(session, symbol, "4h", 100)
         if len(k4h) < 50: return
         c4h = [float(x[4]) for x in k4h]
@@ -161,7 +159,6 @@ async def scan_symbol(session, symbol):
         macd_hist_4h = macd_hist(c4h)
         close_4h = c4h[-1]
 
-        # === DADOS 1H ===
         k1h = await get_klines(session, symbol, "1h", 100)
         if len(k1h) < 50: return
         c1h = [float(x[4]) for x in k1h]
@@ -170,7 +167,6 @@ async def scan_symbol(session, symbol):
         macd_hist_1h = macd_hist(c1h)
         close_1h = c1h[-1]
 
-        # === CONDIÇÕES ===
         cond_1d = (
             ema9_1d > ema21_1d and
             close_1d > ema200_1d and
@@ -203,7 +199,7 @@ async def scan_symbol(session, symbol):
             )
             if await tg(session, msg):
                 mark(symbol, "TRIPLA")
-                print(f"ALERTA TRIPLA ENVIADO: {symbol}")
+                print(f"[{now_br()}] ALERTA TRIPLA ENVIADO: {symbol}")
 
     except Exception as e:
         print(f"[ERRO SCAN] {symbol}: {e}")
@@ -215,6 +211,7 @@ async def main_loop():
         print(f"[{now_br()}] BOT V2.2 INICIADO")
         while True:
             symbols = await get_top_usdt_symbols(session)
+            print(f"[{now_br()}] Monitorando {len(symbols)} pares USDT: {symbols[:10]} ...")  # ✅ linha reativada
             await asyncio.gather(*[scan_symbol(session, s) for s in symbols])
             await asyncio.sleep(300)
 

@@ -1,5 +1,5 @@
-# main.py — LONGSETUP CONFIRMADO V2.2 (FINAL CORRIGIDO COM LOGS)
-# Entrada 1D+4H+1H | Stop 1h | Alvo 1:3 e 1:5 | Saída MACD 1D < 0
+# main.py — LONGSETUP CONFIRMADO V2.2 (FINAL CORRIGIDO COM LOGS - 15m/1h/4h)
+# Entrada 15m + 4H + 1H | Stop 1h | Alvo 1:3 e 1:5 | Saída MACD 15m < 0
 
 import os, asyncio, aiohttp, time, threading
 from datetime import datetime, timedelta
@@ -9,7 +9,7 @@ from flask import Flask
 BINANCE_HTTP = "https://api.binance.com"
 TOP_N = 80
 REQ_TIMEOUT = 10
-COOLDOWN_SEC = 15 * 60  # 15 min (mantido do original)
+COOLDOWN_SEC = 15 * 60  # 15 min (mantido)
 VOL_MIN_USDT = 20_000_000  # volume mínimo reduzido
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
@@ -20,7 +20,7 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "Scanner ativo (LongSetup V2.2) — Tendência Longa 1h/4h/1D", 200
+    return "Scanner ativo (LongSetup V2.2) — Tendência Longa 15m/1h/4h", 200
 
 @app.route("/health")
 def health():
@@ -114,8 +114,9 @@ async def get_top_usdt_symbols(session):
         if s.endswith("USDT") and qv >= VOL_MIN_USDT:
             pares.append((s, qv))
     pares.sort(key=lambda x: x[1], reverse=True)
-    print(f"[INFO] {len(pares[:TOP_N])} pares USDT válidos (TOP {TOP_N})")
-    return [s for s, _ in pares[:TOP_N]]
+    only = [s for s, _ in pares[:TOP_N]]
+    print(f"[{now_br()}] TOP {len(only)} pares USDT por volume (>= {VOL_MIN_USDT/1_000_000:.0f}M USDT 24h): {', '.join(only)}")
+    return only
 
 # ---------------- ESTADO ----------------
 POSICOES = {}
@@ -131,19 +132,21 @@ def mark(symbol, kind):
 # ---------------- WORKER ----------------
 async def scan_symbol(session, symbol):
     try:
-        k1d = await get_klines(session, symbol, "1d", 200)
-        if len(k1d) < 50: return
-        c1d = [float(x[4]) for x in k1d]
-        v1d = [float(x[5]) for x in k1d]
-        close_1d = c1d[-1]
-        ema9_1d = ema(c1d, 9)[-1]
-        ema21_1d = ema(c1d, 21)[-1]
-        ema200_1d = ema(c1d, 200)[-1]
-        rsi_1d = calc_rsi(c1d)[-1]
-        macd_hist_1d = macd_hist(c1d)
-        vol_med_20 = sum(v1d[-20:]) / 20
-        vol_atual = v1d[-1]
+        # === BASE 15m (ENTRADA PRINCIPAL) ===
+        k15 = await get_klines(session, symbol, "15m", 200)
+        if len(k15) < 50: return
+        c15 = [float(x[4]) for x in k15]
+        v15 = [float(x[5]) for x in k15]
+        close_15 = c15[-1]
+        ema9_15 = ema(c15, 9)[-1]
+        ema21_15 = ema(c15, 21)[-1]
+        ema200_15 = ema(c15, 200)[-1]
+        rsi_15 = calc_rsi(c15)[-1]
+        macd_hist_15 = macd_hist(c15)
+        vol_med_20_15 = sum(v15[-20:]) / 20
+        vol_atual_15 = v15[-1]
 
+        # === CONFIRMAÇÕES 4H e 1H ===
         k4h = await get_klines(session, symbol, "4h", 100)
         if len(k4h) < 50: return
         c4h = [float(x[4]) for x in k4h]
@@ -161,17 +164,19 @@ async def scan_symbol(session, symbol):
         macd_hist_1h = macd_hist(c1h)
         close_1h = c1h[-1]
 
-        cond_1d = (
-            ema9_1d > ema21_1d and
-            close_1d > ema200_1d and
-            40 <= rsi_1d <= 70 and
-            macd_hist_1d > 0 and
-            vol_atual > vol_med_20 * 1.2
+        # === CONDIÇÕES ===
+        cond_15m = (
+            ema9_15 > ema21_15 and
+            close_15 > ema200_15 and
+            40 <= rsi_15 <= 70 and
+            macd_hist_15 > 0 and
+            vol_atual_15 > vol_med_20_15 * 1.2
         )
         conf_4h = sum([ema9_4h > ema21_4h, macd_hist_4h > 0, close_4h > ema50_4h]) >= 2
         conf_1h = sum([ema9_1h > ema21_1h, macd_hist_1h > 0]) >= 2
 
-        if cond_1d and conf_4h and conf_1h and allowed(symbol, "TRIPLA"):
+        # === ENTRADA (STOP em 1h) ===
+        if cond_15m and conf_4h and conf_1h and allowed(symbol, "TRIPLA"):
             swing_low = min(float(x[3]) for x in k1h[-5:])
             stop = swing_low * 0.995
             risco = close_1h - stop
@@ -195,6 +200,23 @@ async def scan_symbol(session, symbol):
                 mark(symbol, "TRIPLA")
                 print(f"[ALERTA ENVIADO] {symbol}")
 
+        # === SAÍDA AUTOMÁTICA (MACD 15m vira negativo) ===
+        if symbol in POSICOES and POSICOES[symbol]["ativo"]:
+            if macd_hist_15 <= 0:
+                entry = POSICOES[symbol]["entry"]
+                lucro = ((close_15 - entry) / entry) * 100
+                msg = (
+                    "<b>SAÍDA AUTOMÁTICA</b>\n"
+                    f"<b>{symbol}</b>\n"
+                    f"Entrada: ${fmt_price(entry)}\n"
+                    f"Saída: ${fmt_price(close_15)}\n"
+                    f"Lucro: {lucro:+.1f}%\n"
+                    f"Motivo: MACD 15m virou negativo\n"
+                    f"{now_br()}"
+                )
+                if await tg(session, msg):
+                    POSICOES[symbol]["ativo"] = False
+
     except Exception as e:
         print(f"[ERRO SCAN] {symbol}: {e}")
 
@@ -202,7 +224,8 @@ async def scan_symbol(session, symbol):
 async def main_loop():
     async with aiohttp.ClientSession() as session:
         await tg(session, f"<b>BOT LONGSETUP V2.2 INICIADO</b>\n{now_br()}")
-        print(f"[{now_br()}] BOT V2.2 INICIADO")
+        print(f"[{now_br()}] BOT V2.2 INICIADO (15m/1h/4h)")
+
         while True:
             start = time.time()
             symbols = await get_top_usdt_symbols(session)
@@ -210,7 +233,11 @@ async def main_loop():
                 print(f"[{now_br()}] Nenhum par disponível. Aguardando 30s...")
                 await asyncio.sleep(30)
                 continue
+
+            # Logs visíveis no Render para confirmar monitoramento
             print(f"[{now_br()}] Escaneando {len(symbols)} pares...")
+            print(f"[{now_br()}] PARES MONITORADOS: {', '.join(symbols)}")
+
             await asyncio.gather(*[scan_symbol(session, s) for s in symbols])
             elapsed = time.time() - start
             print(f"[{now_br()}] Scan concluído em {elapsed:.1f}s. Próximo ciclo em 5 min...")

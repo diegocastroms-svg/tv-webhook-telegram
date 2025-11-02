@@ -1,15 +1,20 @@
-# v2.5_long_real.py — 100% COMPATÍVEL COM RENDER (PORTA FIXA)
+# main.py — V2.5 LONGO REAL — RENDER 100% FUNCIONAL
 
 import os, asyncio, aiohttp, time
 from datetime import datetime, timedelta, timezone
 from flask import Flask
 import threading
 
-# ---------------- FLASK + PORTA SEGURA ----------------
+# ---------------- FLASK + ROTAS ----------------
 app = Flask(__name__)
+
 @app.route("/")
 def home():
     return f"V2.5 LONGO REAL RODANDO | {now_br()} BR", 200
+
+@app.route("/health")  # <--- ESSA ROTA SALVA O DEPLOY
+def health():
+    return "OK", 200
 
 # ---------------- CONFIG ----------------
 BINANCE_HTTP = "https://api.binance.com"
@@ -208,7 +213,7 @@ async def scan_long(session, symbol):
 # ---------------- MAIN LOOP ----------------
 async def main_loop():
     async with aiohttp.ClientSession() as session:
-        await tg(session, f"<b>{VERSION} ATIVO</b>\nTendência Longa Real\n{now_br()} BR")
+        await tg(session, f"<b>{VERSION} ATIVO</b>\nTendência Longa Real + 4h\n{now_br()} BR")
         while True:
             try:
                 url = f"{BINANCE_HTTP}/api/v3/ticker/24hr"
@@ -221,7 +226,7 @@ async def main_loop():
                 print(f"[ERRO MAIN] {e}")
             await asyncio.sleep(60)
 
-# ---------------- RODA BOT EM THREAD ----------------
+# ---------------- RODA BOT ----------------
 def start_bot():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -229,12 +234,12 @@ def start_bot():
 
 threading.Thread(target=start_bot, daemon=True).start()
 
-# ---------------- RENDER PORT (100% SEGURO) ----------------
+# ---------------- RENDER PORT ----------------
 if __name__ == "__main__":
     try:
         port_str = os.environ.get("PORT", "10000").strip()
         port = int(port_str) if port_str.isdigit() else 10000
     except:
         port = 10000
-    print(f"[INFO] Iniciando Flask na porta {port}")
+    print(f"[INFO] Iniciando na porta {port} com /health ativo")
     app.run(host="0.0.0.0", port=port)

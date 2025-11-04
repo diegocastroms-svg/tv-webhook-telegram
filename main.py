@@ -1,245 +1,166 @@
-# main.py — V2.5 LONGO REAL — RENDER 100% FUNCIONAL
-
+# main_long.py — V21.1L TENDÊNCIA LONGA (4H, 12H, 1D)
 import os, asyncio, aiohttp, time
 from datetime import datetime, timedelta, timezone
 from flask import Flask
 import threading
 
-# ---------------- FLASK + ROTAS ----------------
 app = Flask(__name__)
-
 @app.route("/")
 def home():
-    return f"V2.5 LONGO REAL RODANDO | {now_br()} BR", 200
+    return "V21.1L TENDÊNCIA LONGA ATIVO", 200
 
-@app.route("/health")  # <--- ESSA ROTA SALVA O DEPLOY
+@app.route("/health")
 def health():
     return "OK", 200
 
-# ---------------- CONFIG ----------------
-BINANCE_HTTP = "https://api.binance.com"
-COOLDOWN_SEC = 30 * 60
-REQ_TIMEOUT = 10
-VERSION = "V2.5 LONGO REAL"
-
+BINANCE = "https://api.binance.com"
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
 CHAT_ID = os.getenv("CHAT_ID", "").strip()
 
-# ---------------- UTILS ----------------
 def now_br():
     return (datetime.now(timezone.utc) - timedelta(hours=3)).strftime("%H:%M")
 
-async def tg(session, text: str):
-    if not (TELEGRAM_TOKEN and CHAT_ID):
-        print(f"[ALERTA] {text}")
+async def tg(s, msg):
+    if not TELEGRAM_TOKEN:
+        print(msg)
         return
     try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        await session.post(url, data={"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML"}, timeout=REQ_TIMEOUT)
+        await s.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                     data={"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML"}, timeout=10)
     except Exception as e:
-        print(f"[TG ERRO] {e}")
+        print("Erro Telegram:", e)
 
-def ema(seq, period):
-    if len(seq) < 1: return []
-    alpha = 2 / (period + 1)
-    e = seq[0]
+def ema(data, p):
+    if not data: return []
+    a = 2 / (p + 1)
+    e = data[0]
     out = [e]
-    for p in seq[1:]:
-        e = alpha * p + (1 - alpha) * e
+    for x in data[1:]:
+        e = a * x + (1 - a) * e
         out.append(e)
     return out
 
-def calc_rsi(prices, period=14):
-    if len(prices) < period + 1: return 50.0
-    deltas = [prices[i] - prices[i-1] for i in range(1, len(prices))]
-    gains = [max(d, 0) for d in deltas[:period]]
-    losses = [abs(min(d, 0)) for d in deltas[:period]]
-    avg_g = sum(gains)/period
-    avg_l = sum(losses)/period or 1e-12
-    rs = avg_g / avg_l
-    rsi = 100 - 100/(1+rs)
-    for i in range(period, len(deltas)):
-        d = deltas[i]
-        g = d if d > 0 else 0
-        l = -d if d < 0 else 0
-        avg_g = (avg_g * (period-1) + g) / period
-        avg_l = (avg_l * (period-1) + l) / period
-        rs = avg_g / (avg_l + 1e-12)
-        rsi = 100 - 100/(1+rs)
-    return rsi
+def rsi(prices, p=14):
+    if len(prices) < p + 1: return 50
+    d = [prices[i] - prices[i-1] for i in range(1, len(prices))]
+    g = [max(x, 0) for x in d[-p:]]
+    l = [abs(min(x, 0)) for x in d[-p:]]
+    ag, al = sum(g) / p, sum(l) / p or 1e-12
+    return 100 - 100 / (1 + ag / al)
 
-def calc_atr(klines):
-    if len(klines) < 2: return 0
-    trs = []
-    for i in range(1, len(klines)):
-        high = float(klines[i][2])
-        low = float(klines[i][3])
-        prev_close = float(klines[i-1][4])
-        tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
-        trs.append(tr)
-    return sum(trs) / len(trs) if trs else 0
+async def klines(s, sym, tf, lim=100):
+    url = f"{BINANCE}/api/v3/klines?symbol={sym}&interval={tf}&limit={lim}"
+    async with s.get(url, timeout=10) as r:
+        return await r.json() if r.status == 200 else []
 
-# ---------------- BINANCE ----------------
-async def get_klines(session, symbol, interval, limit=100):
-    url = f"{BINANCE_HTTP}/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
-    try:
-        async with session.get(url, timeout=REQ_TIMEOUT) as r:
-            if r.status != 200: return []
-            return await r.json()
-    except:
-        return []
+async def ticker(s, sym):
+    url = f"{BINANCE}/api/v3/ticker/24hr?symbol={sym}"
+    async with s.get(url, timeout=10) as r:
+        return await r.json() if r.status == 200 else None
 
-async def get_ticker_24hr(session, symbol):
-    url = f"{BINANCE_HTTP}/api/v3/ticker/24hr?symbol={symbol}"
-    try:
-        async with session.get(url, timeout=REQ_TIMEOUT) as r:
-            if r.status != 200: return None
-            return await r.json()
-    except:
-        return None
+# cooldowns individuais
+cooldowns = {tf: {} for tf in ["4h", "12h", "1d"]}
 
-# ---------------- COOLDOWN ----------------
-cooldowns = {}
-def can_alert(s):
-    key = f"{s}_long"
-    now = time.time()
-    if now - cooldowns.get(key, 0) >= COOLDOWN_SEC:
-        cooldowns[key] = now
+def can_alert(tf, sym):
+    cd = cooldowns[tf]
+    cooldown_time = {"4h": 14400, "12h": 43200, "1d": 86400}[tf]  # 4h, 12h, 1d
+    n = time.time()
+    if n - cd.get(sym, 0) >= cooldown_time:
+        cd[sym] = n
         return True
     return False
 
-# ---------------- SCAN LONGO ----------------
-async def scan_long(session, symbol):
+async def scan_tf(s, sym, tf):
     try:
-        ticker = await get_ticker_24hr(session, symbol)
-        if not ticker: return
-        change24 = float(ticker["priceChangePercent"])
-        preco = float(ticker["lastPrice"])
+        t = await ticker(s, sym)
+        if not t: return
+        p = float(t["lastPrice"])
+        vol24 = float(t["quoteVolume"])
+        if vol24 < 10_000_000: return  # VOLUME 10M
 
-        k15m = await get_klines(session, symbol, "15m", 100)
-        if not k15m or len(k15m) < 50: return
-        close15m = [float(k[4]) for k in k15m[:-1]]
-        vol15m = [float(k[5]) for k in k15m[:-1]]
+        k = await klines(s, sym, tf, 100)
+        if len(k) < 50: return
+        close = [float(x[4]) for x in k]
 
-        k1h = await get_klines(session, symbol, "1h", 100)
-        if not k1h or len(k1h) < 50: return
-        close1h = [float(k[4]) for k in k1h[:-1]]
+        ema9_prev = ema(close[:-1], 9)
+        ema20_prev = ema(close[:-1], 20)
+        if len(ema9_prev) < 2 or len(ema20_prev) < 2: return
 
-        k4h = await get_klines(session, symbol, "4h", 100)
-        if not k4h or len(k4h) < 80: return
-        close4h = [float(k[4]) for k in k4h[:-1]]
+        alpha9 = 2 / (9 + 1)
+        alpha20 = 2 / (20 + 1)
+        ema9_atual = ema9_prev[-1] * (1 - alpha9) + close[-1] * alpha9
+        ema20_atual = ema20_prev[-1] * (1 - alpha20) + close[-1] * alpha20
 
-        e9_15 = ema(close15m, 9)
-        e21_15 = ema(close15m, 21)
-        e200_15 = ema(close15m, 200)
-        e9_1h = ema(close1h, 9)
-        e21_1h = ema(close1h, 21)
-        e9_4h = ema(close4h, 9)
-        e21_4h = ema(close4h, 21)
-        e50_4h = ema(close4h, 50)
+        cruzamento_agora = ema9_prev[-1] <= ema20_prev[-1] and ema9_atual > ema20_atual
+        cruzamento_confirmado = ema9_prev[-2] <= ema20_prev[-2] and ema9_prev[-1] > ema20_prev[-1]
+        if not (cruzamento_agora or cruzamento_confirmado): return
 
-        rsi15 = calc_rsi(close15m[-30:])
-        rsi15_ant = calc_rsi(close15m[-31:-1])
+        if p < ema9_atual * 0.999: return  # folga 0,1%
+        current_rsi = rsi(close)
+        if current_rsi < 40 or current_rsi > 80: return
 
-        vol_ultima = vol15m[-1]
-        vol_media_5 = sum(vol15m[-6:-1]) / 5
-        vol_ratio = vol_ultima / vol_media_5 if vol_media_5 > 0 else 0
-
-        ef12 = ema(close15m, 12)
-        es26 = ema(close15m, 26)
-        macd_line = [f - s for f, s in zip(ef12, es26)]
-        sig = ema(macd_line, 9)
-        hist = [m - sg for m, sg in zip(macd_line[-len(sig):], sig)]
-        macd_hist = hist[-1] if hist else 0
-
-        ef12_4h = ema(close4h, 12)
-        es26_4h = ema(close4h, 26)
-        macd_line_4h = [f - s for f, s in zip(ef12_4h, es26_4h)]
-        sig_4h = ema(macd_line_4h, 9)
-        hist_4h = [m - sg for m, sg in zip(macd_line_4h[-len(sig_4h):], sig_4h)]
-        macd_hist_4h = hist_4h[-1] if hist_4h else 0
-
-        if (change24 >= 5 and
-            vol_ratio >= 2.0 and
-            len(hist) >= 3 and macd_hist > 0.005 and hist[-1] > hist[-2] and
-            e9_15[-1] > e21_15[-1] and
-            preco > e200_15[-1] and
-            rsi15 > 55 and rsi15 > rsi15_ant and
-            e9_1h[-1] > e21_1h[-1] and
-            e9_4h[-1] > e21_4h[-1] and
-            preco > e50_4h[-1] and
-            macd_hist_4h > 0.002 and
-            can_alert(symbol)):
-
-            atr = calc_atr(k15m[-15:])
-            volatilidade = atr / preco if atr > 0 else 0
-            forca_macd = macd_hist / 0.01
-            forca_ema = (preco / e21_15[-1] - 1) * 100
-            forca_rsi = (rsi15 - 50) / 50
-            forca_total = (forca_macd + forca_ema + forca_rsi) / 3
-            vol_sustentado = sum(vol15m[-5:]) / 5 > vol_media_5 * 1.5
-
-            if forca_total > 1.5 and volatilidade > 0.02 and vol_sustentado:
-                tempo_dias = 3
-            elif forca_total > 1.0:
-                tempo_dias = 5
-            elif forca_total > 0.5:
-                tempo_dias = 7
-            else:
-                tempo_dias = 14
-
-            tempo_estimado = f"{tempo_dias}-{tempo_dias + 7} DIAS"
-
-            alvo1 = preco * 1.03
-            alvo2 = preco * 1.05
-            stop = min([float(k[3]) for k in k15m[-6:]]) * 0.98
-
+        if can_alert(tf, sym):
+            stop = min(float(x[3]) for x in k[-10:]) * 0.98
+            alvo1 = p * 1.08
+            alvo2 = p * 1.15
+            prob = {"4h": "88%", "12h": "90%", "1d": "93%"}[tf]
+            emoji = {"4h": "🔥", "12h": "🌕", "1d": "🏆"}[tf]
+            color = {"4h": "🟣", "12h": "🟠", "1d": "🟡"}[tf]
             msg = (
-                f"<b>UP TENDÊNCIA LONGA CONFIRMADA</b>\n"
-                f"<code>{symbol}</code>\n"
-                f"Preço: <b>{preco:.6f}</b>\n"
-                f"<b>PROBABILIDADE: 85%</b>\n"
-                f"<b>TEMPO ESTIMADO: {tempo_estimado}</b>\n"
-                f"Stop: <b>{stop:.6f}</b>\n"
-                f"Alvo 1: <b>{alvo1:.6f}</b> (+3%)\n"
-                f"Alvo 2: <b>{alvo2:.6f}</b> (+5%)\n"
-                f"<i>{now_br()} BR</i>"
+                f"━━━━━━━━━━━━━━━━━━━\n"
+                f"📊 <b>TENDÊNCIA LONGA {tf.upper()}</b> {emoji} {color}\n"
+                f"<code>{sym}</code>\n"
+                f"━━━━━━━━━━━━━━━━━━━\n"
+                f"💰 Preço: <b>{p:.6f}</b>\n"
+                f"📈 RSI: <b>{current_rsi:.1f}</b>\n"
+                f"💵 Volume: <b>${vol24:,.0f}</b>\n"
+                f"🌟 Probabilidade: <b>{prob}</b>\n\n"
+                f"🛑 Stop: <b>{stop:.6f}</b>\n"
+                f"🎯 +8%: <b>{alvo1:.6f}</b>\n"
+                f"🏁 +15%: <b>{alvo2:.6f}</b>\n"
+                f"🕒 {now_br()} BR\n"
+                f"━━━━━━━━━━━━━━━━━━━"
             )
-            await tg(session, msg)
-
+            await tg(s, msg)
     except Exception as e:
-        print(f"[ERRO SCAN] {e}")
+        print("Erro scan_tf:", e)
 
-# ---------------- MAIN LOOP ----------------
 async def main_loop():
-    async with aiohttp.ClientSession() as session:
-        await tg(session, f"<b>{VERSION} ATIVO</b>\nTendência Longa Real + 4h\n{now_br()} BR")
+    async with aiohttp.ClientSession() as s:
+        await tg(s, "<b>V21.1L TENDÊNCIA LONGA ATIVO</b>\n4H, 12H e 1D Monitorando 🔥")
         while True:
             try:
-                url = f"{BINANCE_HTTP}/api/v3/ticker/24hr"
-                async with session.get(url, timeout=REQ_TIMEOUT) as r:
-                    if r.status != 200: continue
-                    data = await r.json()
-                symbols = [d["symbol"] for d in data if d["symbol"].endswith("USDT") and float(d["quoteVolume"]) > 50_000_000]
-                await asyncio.gather(*[scan_long(session, s) for s in symbols[:100]], return_exceptions=True)
+                data = await (await s.get(f"{BINANCE}/api/v3/ticker/24hr")).json()
+                symbols = [
+                    d["symbol"] for d in data
+                    if d["symbol"].endswith("USDT")
+                    and float(d["quoteVolume"]) > 10_000_000
+                    and (lambda base: not (
+                        base.endswith("USD")
+                        or base in {
+                            "BUSD","FDUSD","USDE","USDC","TUSD","CUSD",
+                            "EUR","GBP","TRY","AUD","BRL","RUB","CAD","CHF","JPY",
+                            "BF","BFC","BFG","BFD","BETA","AEUR","AUSD","CEUR","XAUT"
+                        }
+                    ))(d["symbol"][:-4])
+                    and not any(x in d["symbol"] for x in ["UP", "DOWN"])
+                ]
+                symbols = sorted(
+                    symbols,
+                    key=lambda x: next((float(t["quoteVolume"]) for t in data if t["symbol"] == x), 0),
+                    reverse=True
+                )[:100]
+                tasks = []
+                for sym in symbols:
+                    tasks.append(scan_tf(s, sym, "4h"))
+                    tasks.append(scan_tf(s, sym, "12h"))
+                    tasks.append(scan_tf(s, sym, "1d"))
+                await asyncio.gather(*tasks)
             except Exception as e:
-                print(f"[ERRO MAIN] {e}")
+                print("Erro main_loop:", e)
             await asyncio.sleep(60)
 
-# ---------------- RODA BOT ----------------
-def start_bot():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(main_loop())
+threading.Thread(target=lambda: asyncio.run(main_loop()), daemon=True).start()
 
-threading.Thread(target=start_bot, daemon=True).start()
-
-# ---------------- RENDER PORT ----------------
 if __name__ == "__main__":
-    try:
-        port_str = os.environ.get("PORT", "10000").strip()
-        port = int(port_str) if port_str.isdigit() else 10000
-    except:
-        port = 10000
-    print(f"[INFO] Iniciando na porta {port} com /health ativo")
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))

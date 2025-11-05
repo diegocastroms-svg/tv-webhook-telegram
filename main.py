@@ -1,4 +1,4 @@
-# main_long.py — V21.1L TENDÊNCIA LONGA (4H, 12H, 1D)
+# main_long.py — V21.2L SINCRONIZADO (4H, 12H, 1D)
 import os, asyncio, aiohttp, time
 from datetime import datetime, timedelta, timezone
 from flask import Flask
@@ -7,7 +7,7 @@ import threading
 app = Flask(__name__)
 @app.route("/")
 def home():
-    return "V21.1L TENDÊNCIA LONGA ATIVO", 200
+    return "V21.2L SINCRONIZADO ATIVO", 200
 
 @app.route("/health")
 def health():
@@ -25,8 +25,11 @@ async def tg(s, msg):
         print(msg)
         return
     try:
-        await s.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                     data={"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML"}, timeout=10)
+        await s.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+            data={"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML"},
+            timeout=10
+        )
     except Exception as e:
         print("Erro Telegram:", e)
 
@@ -38,6 +41,15 @@ def ema(data, p):
     for x in data[1:]:
         e = a * x + (1 - a) * e
         out.append(e)
+    return out
+
+def sma_series(data, p):
+    if len(data) < p: return []
+    s = sum(data[:p])
+    out = [s / p]
+    for i in range(p, len(data)):
+        s += data[i] - data[i - p]
+        out.append(s / p)
     return out
 
 def rsi(prices, p=14):
@@ -58,17 +70,21 @@ async def ticker(s, sym):
     async with s.get(url, timeout=10) as r:
         return await r.json() if r.status == 200 else None
 
-# cooldowns individuais
+# cooldowns individuais (guarda timestamp do último alerta por tf/símbolo)
 cooldowns = {tf: {} for tf in ["4h", "12h", "1d"]}
 
 def can_alert(tf, sym):
     cd = cooldowns[tf]
-    cooldown_time = {"4h": 14400, "12h": 43200, "1d": 86400}[tf]  # 4h, 12h, 1d
+    cooldown_time = {"4h": 14400, "12h": 43200, "1d": 86400}[tf]
     n = time.time()
     if n - cd.get(sym, 0) >= cooldown_time:
         cd[sym] = n
         return True
     return False
+
+# controle de sincronismo: processa apenas 1x por vela fechada
+# guarda o open_time (ms) da ÚLTIMA vela FECHADA já processada por tf/símbolo
+last_processed = {tf: {} for tf in ["4h", "12h", "1d"]}
 
 async def scan_tf(s, sym, tf):
     try:
@@ -80,27 +96,48 @@ async def scan_tf(s, sym, tf):
 
         k = await klines(s, sym, tf, 100)
         if len(k) < 50: return
-        close = [float(x[4]) for x in k]
 
-        ema9_prev = ema(close[:-1], 9)
-        ema20_prev = ema(close[:-1], 20)
-        if len(ema9_prev) < 2 or len(ema20_prev) < 2: return
+        # k[-1] = vela em formação; última FECHADA = k[-2]
+        # open_time em ms:
+        last_closed_open_ms = int(k[-2][0])
+        # se já processamos essa vela fechada, sair
+        if last_processed[tf].get(sym) == last_closed_open_ms:
+            return
 
-        alpha9 = 2 / (9 + 1)
-        alpha20 = 2 / (20 + 1)
-        ema9_atual = ema9_prev[-1] * (1 - alpha9) + close[-1] * alpha9
-        ema20_atual = ema20_prev[-1] * (1 - alpha20) + close[-1] * alpha20
+        # série de closes SOMENTE com velas FECHADAS (exclui k[-1])
+        close = [float(x[4]) for x in k[:-1]]
+        if len(close) < 22:  # margem para MA20, cruzamento e RSI
+            return
 
-        cruzamento_agora = ema9_prev[-1] <= ema20_prev[-1] and ema9_atual > ema20_atual
-        cruzamento_confirmado = ema9_prev[-2] <= ema20_prev[-2] and ema9_prev[-1] > ema20_prev[-1]
-        if not (cruzamento_agora or cruzamento_confirmado): return
+        # EMA9 e MA20 em velas FECHADAS
+        ema9 = ema(close, 9)
+        ma20 = sma_series(close, 20)
+        if len(ema9) < 2 or len(ma20) < 2:
+            return
 
-        if p < ema9_atual * 0.999: return  # folga 0,1%
+        # cruzamento confirmado ENTRE velas fechadas
+        cruzamento_confirmado = (ema9[-2] <= ma20[-2]) and (ema9[-1] > ma20[-1])
+        if not cruzamento_confirmado:
+            # atualiza last_processed mesmo sem alerta para não reprocessar sem necessidade?
+            # não: só marcamos quando realmente analisamos o fechamento atual.
+            # ainda assim, marcamos para evitar loop contínuo no mesmo fechamento.
+            last_processed[tf][sym] = last_closed_open_ms
+            return
+
+        # filtros adicionais
         current_rsi = rsi(close)
-        if current_rsi < 40 or current_rsi > 80: return
+        if current_rsi < 40 or current_rsi > 80:
+            last_processed[tf][sym] = last_closed_open_ms
+            return
 
+        # preço atual precisa estar acima da EMA9 mais recente (de vela FECHADA)
+        if p < ema9[-1] * 0.999:  # folga 0,1%
+            last_processed[tf][sym] = last_closed_open_ms
+            return
+
+        # dispara 1x por vela fechada + respeita cooldown de janela
         if can_alert(tf, sym):
-            stop = min(float(x[3]) for x in k[-10:]) * 0.98
+            stop = min(float(x[3]) for x in k[-11:-1]) * 0.98  # últimos 10 lows de velas FECHADAS
             alvo1 = p * 1.08
             alvo2 = p * 1.15
             prob = {"4h": "88%", "12h": "90%", "1d": "93%"}[tf]
@@ -122,12 +159,16 @@ async def scan_tf(s, sym, tf):
                 f"━━━━━━━━━━━━━━━━━━━"
             )
             await tg(s, msg)
+
+        # marca a vela fechada como processada (com ou sem alerta, após filtros)
+        last_processed[tf][sym] = last_closed_open_ms
+
     except Exception as e:
         print("Erro scan_tf:", e)
 
 async def main_loop():
     async with aiohttp.ClientSession() as s:
-        await tg(s, "<b>V21.1L TENDÊNCIA LONGA ATIVO</b>\n4H, 12H e 1D Monitorando 🔥")
+        await tg(s, "<b>V21.2L SINCRONIZADO ATIVO</b>\n4H, 12H e 1D Monitorando 🔥")
         while True:
             try:
                 data = await (await s.get(f"{BINANCE}/api/v3/ticker/24hr")).json()
@@ -150,14 +191,17 @@ async def main_loop():
                     key=lambda x: next((float(t["quoteVolume"]) for t in data if t["symbol"] == x), 0),
                     reverse=True
                 )[:100]
+
                 tasks = []
                 for sym in symbols:
                     tasks.append(scan_tf(s, sym, "4h"))
                     tasks.append(scan_tf(s, sym, "12h"))
                     tasks.append(scan_tf(s, sym, "1d"))
                 await asyncio.gather(*tasks)
+
             except Exception as e:
                 print("Erro main_loop:", e)
+
             await asyncio.sleep(60)
 
 threading.Thread(target=lambda: asyncio.run(main_loop()), daemon=True).start()

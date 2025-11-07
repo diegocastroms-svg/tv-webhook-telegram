@@ -1,4 +1,4 @@
-# main_long.py — V21.4L VISUAL+ (TENDÊNCIA LONGA)
+# main_long.py — V21.5L VISUAL PRO (Layout Telegram Real)
 import os, asyncio, aiohttp, time
 from datetime import datetime, timedelta, timezone
 from flask import Flask
@@ -7,7 +7,7 @@ import threading, statistics
 app = Flask(__name__)
 @app.route("/")
 def home():
-    return "V21.4L VISUAL+ TENDÊNCIA LONGA ATIVO", 200
+    return "V21.5L VISUAL PRO TENDÊNCIA LONGA ATIVO", 200
 
 @app.route("/health")
 def health():
@@ -122,28 +122,28 @@ async def scan_tf(s, sym, tf):
         nome = sym[:-4]
 
         if can_alert(tf, sym):
-            if tf == "1d":
-                titulo = "📊 TENDÊNCIA LONGA 1D 🏆🌕"
-            elif tf == "12h":
-                titulo = "📊 TENDÊNCIA LONGA 12H 🌕🟠"
+            if tf == "1h":
+                titulo = "<b>🌕 ALERTA DINÂMICO 1H 🔶</b>\n\n<b>Cruzamento EMA9/MA20 + Bandas Estreitas</b>"
             elif tf == "4h":
-                titulo = "📊 TENDÊNCIA LONGA 4H 🔥🟣"
+                titulo = "<b>📊 TENDÊNCIA LONGA 4H 🔥🟣</b>\n\n<b>EMA9 CROSS CONFIRMADO — Continuidade de tendência</b>"
+            elif tf == "12h":
+                titulo = "<b>📊 TENDÊNCIA LONGA 12H 🌕🟠</b>\n\n<b>EMA9 CROSS CONFIRMADO — Continuidade de tendência</b>"
             else:
-                titulo = "📊 TENDÊNCIA INTERMEDIÁRIA 1H 🟢"
+                titulo = "<b>📊 TENDÊNCIA LONGA 1D 🏆🌕</b>\n\n<b>EMA9 CROSS CONFIRMADO — Continuidade de tendência</b>"
 
             msg = (
-                f"{titulo}\n"
-                f"{nome}\n"
-                f"──────────────────────────\n"
-                f"💰 Preço: {p:.6f}\n"
-                f"📈 RSI: {current_rsi:.1f}\n"
-                f"💵 Volume: ${vol24:,.0f}\n"
-                f"🌟 Probabilidade: {prob:.0f}%\n"
-                f"🛑 Stop: {stop:.6f}\n"
-                f"🎯 +8%: {alvo1:.6f}\n"
-                f"🏁 +15%: {alvo2:.6f}\n"
-                f"⏱️ {now_br()} BR\n"
-                f"──────────────────────────"
+                f"{titulo}\n\n"
+                f"<b>{nome}</b>\n"
+                f"<b>──────────────────────────</b>\n"
+                f"<b>💰 Preço: {p:.6f}</b>\n"
+                f"<b>📈 RSI: {current_rsi:.1f}</b>\n"
+                f"<b>💵 Volume 24h: ${vol24:,.0f}</b>\n"
+                f"<b>──────────────────────────</b>\n"
+                f"<b>🛑 Stop: {stop:.6f}</b>\n"
+                f"<b>🎯 +8%: {alvo1:.6f}</b>\n"
+                f"<b>🏁 +15%: {alvo2:.6f}</b>\n"
+                f"<b>──────────────────────────</b>\n"
+                f"<b>⏱️ {now_br()} BR</b>"
             )
             await tg(s, msg)
 
@@ -152,7 +152,7 @@ async def scan_tf(s, sym, tf):
 
 async def main_loop():
     async with aiohttp.ClientSession() as s:
-        await tg(s, "<b>V21.4L VISUAL+ — ALERTAS VISUAIS ATIVOS</b>\n1H + 4H + 12H + 1D | LAYOUT TELEGRAM IDÊNTICO AO PRINT")
+        await tg(s, "<b>V21.5L VISUAL PRO — Layout Telegram Real Ativo</b>\n<b>1H + 4H + 12H + 1D | Espaçamento e Negrito Aplicados</b>")
         while True:
             try:
                 data = await (await s.get(f"{BINANCE}/api/v3/ticker/24hr")).json()

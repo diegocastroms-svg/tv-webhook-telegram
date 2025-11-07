@@ -1,13 +1,13 @@
-# main_long.py — V21.2L SINCRONIZADO (4H, 12H, 1D)
+# main_long.py — V21.3L SINCRONIZADO (1H, 4H, 12H, 1D)
 import os, asyncio, aiohttp, time
 from datetime import datetime, timedelta, timezone
 from flask import Flask
-import threading
+import threading, statistics
 
 app = Flask(__name__)
 @app.route("/")
 def home():
-    return "V21.2L SINCRONIZADO ATIVO", 200
+    return "V21.3L TENDÊNCIA LONGA ATIVO", 200
 
 @app.route("/health")
 def health():
@@ -25,11 +25,8 @@ async def tg(s, msg):
         print(msg)
         return
     try:
-        await s.post(
-            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-            data={"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML"},
-            timeout=10
-        )
+        await s.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                     data={"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML"}, timeout=10)
     except Exception as e:
         print("Erro Telegram:", e)
 
@@ -41,15 +38,6 @@ def ema(data, p):
     for x in data[1:]:
         e = a * x + (1 - a) * e
         out.append(e)
-    return out
-
-def sma_series(data, p):
-    if len(data) < p: return []
-    s = sum(data[:p])
-    out = [s / p]
-    for i in range(p, len(data)):
-        s += data[i] - data[i - p]
-        out.append(s / p)
     return out
 
 def rsi(prices, p=14):
@@ -70,21 +58,19 @@ async def ticker(s, sym):
     async with s.get(url, timeout=10) as r:
         return await r.json() if r.status == 200 else None
 
-# cooldowns individuais (guarda timestamp do último alerta por tf/símbolo)
-cooldowns = {tf: {} for tf in ["4h", "12h", "1d"]}
+cooldown_1h = {}
+cooldown_4h = {}
+cooldown_12h = {}
+cooldown_1d = {}
 
 def can_alert(tf, sym):
-    cd = cooldowns[tf]
-    cooldown_time = {"4h": 14400, "12h": 43200, "1d": 86400}[tf]
+    cd = cooldown_1h if tf == "1h" else cooldown_4h if tf == "4h" else cooldown_12h if tf == "12h" else cooldown_1d
+    cooldown_time = 1800 if tf == "1h" else 7200 if tf == "4h" else 14400 if tf == "12h" else 21600
     n = time.time()
     if n - cd.get(sym, 0) >= cooldown_time:
         cd[sym] = n
         return True
     return False
-
-# controle de sincronismo: processa apenas 1x por vela fechada
-# guarda o open_time (ms) da ÚLTIMA vela FECHADA já processada por tf/símbolo
-last_processed = {tf: {} for tf in ["4h", "12h", "1d"]}
 
 async def scan_tf(s, sym, tf):
     try:
@@ -92,98 +78,97 @@ async def scan_tf(s, sym, tf):
         if not t: return
         p = float(t["lastPrice"])
         vol24 = float(t["quoteVolume"])
-        if vol24 < 10_000_000: return  # VOLUME 10M
+        if vol24 < 5_000_000: return
 
         k = await klines(s, sym, tf, 100)
         if len(k) < 50: return
+        close = [float(x[4]) for x in k]
 
-        # k[-1] = vela em formação; última FECHADA = k[-2]
-        # open_time em ms:
-        last_closed_open_ms = int(k[-2][0])
-        # se já processamos essa vela fechada, sair
-        if last_processed[tf].get(sym) == last_closed_open_ms:
+        ema9_prev = ema(close[:-1], 9)
+        ema20_prev = ema(close[:-1], 20)
+        if len(ema9_prev) < 2 or len(ema20_prev) < 2: return
+
+        alpha9 = 2 / (9 + 1)
+        alpha20 = 2 / (20 + 1)
+        ema9_atual = ema9_prev[-1] * (1 - alpha9) + close[-1] * alpha9
+        ema20_atual = ema20_prev[-1] * (1 - alpha20) + close[-1] * alpha20
+
+        cruzamento_agora = ema9_prev[-1] <= ema20_prev[-1] and ema9_atual > ema20_atual * 1.001
+        cruzamento_confirmado = ema9_prev[-2] <= ema20_prev[-2] and ema9_prev[-1] > ema20_prev[-1]
+        if not (cruzamento_agora or cruzamento_confirmado): return
+
+        # filtro específico do 1h com Bollinger estreita
+        if tf == "1h":
+            ma20 = sum(close[-20:]) / 20
+            std = statistics.pstdev(close[-20:])
+            upper = ma20 + 2 * std
+            lower = ma20 - 2 * std
+            largura = (upper - lower) / ma20
+            if largura > 0.045:  # 4% + tolerância
+                return
+
+        close_prev = float(k[-2][4])
+        if close_prev < ema9_prev[-1] or close_prev < ema20_prev[-1]:
             return
 
-        # série de closes SOMENTE com velas FECHADAS (exclui k[-1])
-        close = [float(x[4]) for x in k[:-1]]
-        if len(close) < 22:  # margem para MA20, cruzamento e RSI
+        open_prev = float(k[-2][1])
+        if (close_prev - open_prev) / (open_prev or 1e-12) < 0.01:
             return
 
-        # EMA9 e MA20 em velas FECHADAS
-        ema9 = ema(close, 9)
-        ma20 = sma_series(close, 20)
-        if len(ema9) < 2 or len(ma20) < 2:
-            return
-
-        # cruzamento confirmado ENTRE velas fechadas
-        cruzamento_confirmado = (ema9[-2] <= ma20[-2]) and (ema9[-1] > ma20[-1])
-        if not cruzamento_confirmado:
-            # atualiza last_processed mesmo sem alerta para não reprocessar sem necessidade?
-            # não: só marcamos quando realmente analisamos o fechamento atual.
-            # ainda assim, marcamos para evitar loop contínuo no mesmo fechamento.
-            last_processed[tf][sym] = last_closed_open_ms
-            return
-
-        # filtros adicionais
         current_rsi = rsi(close)
-        if current_rsi < 40 or current_rsi > 80:
-            last_processed[tf][sym] = last_closed_open_ms
-            return
+        if current_rsi < 40 or current_rsi > 80: return
 
-        # preço atual precisa estar acima da EMA9 mais recente (de vela FECHADA)
-        if p < ema9[-1] * 0.999:  # folga 0,1%
-            last_processed[tf][sym] = last_closed_open_ms
-            return
-
-        # dispara 1x por vela fechada + respeita cooldown de janela
         if can_alert(tf, sym):
-            stop = min(float(x[3]) for x in k[-11:-1]) * 0.98  # últimos 10 lows de velas FECHADAS
-            alvo1 = p * 1.08
-            alvo2 = p * 1.15
-            prob = {"4h": "88%", "12h": "90%", "1d": "93%"}[tf]
-            emoji = {"4h": "🔥", "12h": "🌕", "1d": "🏆"}[tf]
-            color = {"4h": "🟣", "12h": "🟠", "1d": "🟡"}[tf]
-            msg = (
-                f"━━━━━━━━━━━━━━━━━━━\n"
-                f"📊 <b>TENDÊNCIA LONGA {tf.upper()}</b> {emoji} {color}\n"
-                f"<code>{sym}</code>\n"
-                f"━━━━━━━━━━━━━━━━━━━\n"
-                f"💰 Preço: <b>{p:.6f}</b>\n"
-                f"📈 RSI: <b>{current_rsi:.1f}</b>\n"
-                f"💵 Volume: <b>${vol24:,.0f}</b>\n"
-                f"🌟 Probabilidade: <b>{prob}</b>\n\n"
-                f"🛑 Stop: <b>{stop:.6f}</b>\n"
-                f"🎯 +8%: <b>{alvo1:.6f}</b>\n"
-                f"🏁 +15%: <b>{alvo2:.6f}</b>\n"
-                f"🕒 {now_br()} BR\n"
-                f"━━━━━━━━━━━━━━━━━━━"
-            )
+            stop = min(float(x[3]) for x in k[-10:]) * 0.98
+            alvo1 = p * 1.025
+            alvo2 = p * 1.05
+            nome = sym[:-4]
+
+            if tf == "1h":
+                msg = (
+                    f"<b>🌕 ALERTA DINÂMICO 1H 🔶</b>\n"
+                    f"<b>Cruzamento EMA9/MA20 + Bandas Estreitas</b>\n\n"
+                    f"<b>{nome}</b>\n\n"
+                    f"💰 Preço: <b>{p:.6f}</b>\n"
+                    f"📊 RSI: <b>{current_rsi:.1f}</b>\n"
+                    f"💵 Volume 24h: <b>${vol24:,.0f}</b>\n"
+                    f"━━━━━━━━━━━━━━━\n"
+                    f"📉 Stop: <b>{stop:.6f}</b>\n"
+                    f"➡️ Alvo +2.5%: <b>{alvo1:.6f}</b>\n"
+                    f"🏁 Alvo +5%: <b>{alvo2:.6f}</b>\n"
+                    f"━━━━━━━━━━━━━━━\n"
+                    f"🕐 <i>Sinal intermediário — atenção ao início da tendência!</i>\n"
+                    f"<i>{now_br()} BR</i>"
+                )
+            else:
+                emoji = "💪" if tf == "4h" else "🟢" if tf == "12h" else "🟣"
+                titulo = "TENDÊNCIA LONGA" if tf == "4h" else "SINCRONIA DE ALTA" if tf == "12h" else "CICLO DIÁRIO"
+                msg = (
+                    f"<b>{emoji} EMA9 CROSS {tf.upper()} — {titulo}</b>\n\n\n"
+                    f"<b>{nome}</b>\n\n"
+                    f"Preço: <b>{p:.6f}</b>\n"
+                    f"RSI: <b>{current_rsi:.1f}</b>\n"
+                    f"Volume 24h: <b>${vol24:,.0f}</b>\n"
+                    f"Stop: <b>{stop:.6f}</b>\n"
+                    f"Alvo +2.5%: <b>{alvo1:.6f}</b>\n"
+                    f"Alvo +5%: <b>{alvo2:.6f}</b>\n"
+                    f"<i>{now_br()} BR</i>"
+                )
+
             await tg(s, msg)
-
-        # marca a vela fechada como processada (com ou sem alerta, após filtros)
-        last_processed[tf][sym] = last_closed_open_ms
-
     except Exception as e:
         print("Erro scan_tf:", e)
 
 async def main_loop():
     async with aiohttp.ClientSession() as s:
-        await tg(s, "<b>V21.2L SINCRONIZADO ATIVO</b>\n4H, 12H e 1D Monitorando 🔥")
+        await tg(s, "<b>V21.3L SINCRONIZADO (1H, 4H, 12H, 1D)</b>\nCOOLDOWN AJUSTADO + BB 1H + NOMES SEM USDT")
         while True:
             try:
                 data = await (await s.get(f"{BINANCE}/api/v3/ticker/24hr")).json()
                 symbols = [
                     d["symbol"] for d in data
                     if d["symbol"].endswith("USDT")
-                    and float(d["quoteVolume"]) > 10_000_000
-                    and (lambda base: not (
-                        base.endswith("USD")
-                        or base in {
-                            "BUSD","FDUSD","USDE","USDC","TUSD","CUSD",
-                            "EUR","GBP","TRY","AUD","BRL","RUB","CAD","CHF","JPY",
-                            "BF","BFC","BFG","BFD","BETA","AEUR","AUSD","CEUR","XAUT"
-                        }
-                    ))(d["symbol"][:-4])
+                    and float(d["quoteVolume"]) > 5_000_000
                     and not any(x in d["symbol"] for x in ["UP", "DOWN"])
                 ]
                 symbols = sorted(
@@ -194,18 +179,16 @@ async def main_loop():
 
                 tasks = []
                 for sym in symbols:
+                    tasks.append(scan_tf(s, sym, "1h"))
                     tasks.append(scan_tf(s, sym, "4h"))
                     tasks.append(scan_tf(s, sym, "12h"))
                     tasks.append(scan_tf(s, sym, "1d"))
                 await asyncio.gather(*tasks)
-
             except Exception as e:
                 print("Erro main_loop:", e)
-
             await asyncio.sleep(60)
 
 threading.Thread(target=lambda: asyncio.run(main_loop()), daemon=True).start()
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT") or 10000)
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))

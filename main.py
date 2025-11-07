@@ -1,4 +1,4 @@
-# main_long.py — V21.3L SINCRONIZADO (1H, 4H, 12H, 1D) — RENDER SAFE
+# main_long.py — V21.3L FIXED (Render Safe + Alertas Restaurados)
 import os, asyncio, aiohttp, time
 from datetime import datetime, timedelta, timezone
 from flask import Flask
@@ -97,21 +97,16 @@ async def scan_tf(s, sym, tf):
         cruzamento_confirmado = ema9_prev[-2] <= ema20_prev[-2] and ema9_prev[-1] > ema20_prev[-1]
         if not (cruzamento_agora or cruzamento_confirmado): return
 
-        # filtro específico do 1h com Bollinger estreita
+        # Filtro específico do 1h — Bollinger estreita
         if tf == "1h":
             ma20 = sum(close[-20:]) / 20
             std = statistics.pstdev(close[-20:])
-            upper = ma20 + 2 * std
-            lower = ma20 - 2 * std
-            largura = (upper - lower) / ma20
-            if largura > 0.045:  # 4% + tolerância
+            largura = (2 * std) / ma20
+            if largura > 0.045:
                 return
 
-        close_prev = float(k[-2][4])
-        if close_prev < ema9_prev[-1] or close_prev < ema20_prev[-1]:
-            return
-
         open_prev = float(k[-2][1])
+        close_prev = float(k[-2][4])
         if (close_prev - open_prev) / (open_prev or 1e-12) < 0.01:
             return
 
@@ -124,6 +119,7 @@ async def scan_tf(s, sym, tf):
             alvo2 = p * 1.05
             nome = sym[:-4]
 
+            # Alertas restaurados por timeframe
             if tf == "1h":
                 msg = (
                     f"<b>🌕 ALERTA DINÂMICO 1H 🔶</b>\n"
@@ -134,34 +130,66 @@ async def scan_tf(s, sym, tf):
                     f"💵 Volume 24h: <b>${vol24:,.0f}</b>\n"
                     f"━━━━━━━━━━━━━━━\n"
                     f"📉 Stop: <b>{stop:.6f}</b>\n"
-                    f"➡️ Alvo +2.5%: <b>{alvo1:.6f}</b>\n"
+                    f"🎯 Alvo +2.5%: <b>{alvo1:.6f}</b>\n"
                     f"🏁 Alvo +5%: <b>{alvo2:.6f}</b>\n"
                     f"━━━━━━━━━━━━━━━\n"
-                    f"🕐 <i>Sinal intermediário — atenção ao início da tendência!</i>\n"
+                    f"🕐 <i>Sinal intermediário — início possível de tendência</i>\n"
                     f"<i>{now_br()} BR</i>"
                 )
-            else:
-                emoji = "💪" if tf == "4h" else "🟢" if tf == "12h" else "🟣"
-                titulo = "TENDÊNCIA LONGA" if tf == "4h" else "SINCRONIA DE ALTA" if tf == "12h" else "CICLO DIÁRIO"
+
+            elif tf == "4h":
                 msg = (
-                    f"<b>{emoji} EMA9 CROSS {tf.upper()} — {titulo}</b>\n\n\n"
+                    f"<b>💪 EMA9 CROSS 4H 🟢 — TENDÊNCIA LONGA</b>\n\n"
                     f"<b>{nome}</b>\n\n"
-                    f"Preço: <b>{p:.6f}</b>\n"
-                    f"RSI: <b>{current_rsi:.1f}</b>\n"
-                    f"Volume 24h: <b>${vol24:,.0f}</b>\n"
-                    f"Stop: <b>{stop:.6f}</b>\n"
-                    f"Alvo +2.5%: <b>{alvo1:.6f}</b>\n"
-                    f"Alvo +5%: <b>{alvo2:.6f}</b>\n"
+                    f"💰 Preço: <b>{p:.6f}</b>\n"
+                    f"📊 RSI: <b>{current_rsi:.1f}</b>\n"
+                    f"💵 Volume 24h: <b>${vol24:,.0f}</b>\n"
+                    f"━━━━━━━━━━━━━━━\n"
+                    f"📉 Stop: <b>{stop:.6f}</b>\n"
+                    f"🎯 Alvo +2.5%: <b>{alvo1:.6f}</b>\n"
+                    f"🏁 Alvo +5%: <b>{alvo2:.6f}</b>\n"
+                    f"━━━━━━━━━━━━━━━\n"
+                    f"<i>{now_br()} BR</i>"
+                )
+
+            elif tf == "12h":
+                msg = (
+                    f"<b>🟣 EMA9 CROSS 12H — SINCRONIA DE ALTA</b>\n\n"
+                    f"<b>{nome}</b>\n\n"
+                    f"💰 Preço: <b>{p:.6f}</b>\n"
+                    f"📊 RSI: <b>{current_rsi:.1f}</b>\n"
+                    f"💵 Volume 24h: <b>${vol24:,.0f}</b>\n"
+                    f"━━━━━━━━━━━━━━━\n"
+                    f"📉 Stop: <b>{stop:.6f}</b>\n"
+                    f"🎯 Alvo +2.5%: <b>{alvo1:.6f}</b>\n"
+                    f"🏁 Alvo +5%: <b>{alvo2:.6f}</b>\n"
+                    f"━━━━━━━━━━━━━━━\n"
+                    f"<i>{now_br()} BR</i>"
+                )
+
+            else:
+                msg = (
+                    f"<b>🌍 EMA9 CROSS 1D 🟢 — CICLO DIÁRIO</b>\n\n"
+                    f"<b>{nome}</b>\n\n"
+                    f"💰 Preço: <b>{p:.6f}</b>\n"
+                    f"📊 RSI: <b>{current_rsi:.1f}</b>\n"
+                    f"💵 Volume 24h: <b>${vol24:,.0f}</b>\n"
+                    f"━━━━━━━━━━━━━━━\n"
+                    f"📉 Stop: <b>{stop:.6f}</b>\n"
+                    f"🎯 Alvo +2.5%: <b>{alvo1:.6f}</b>\n"
+                    f"🏁 Alvo +5%: <b>{alvo2:.6f}</b>\n"
+                    f"━━━━━━━━━━━━━━━\n"
                     f"<i>{now_br()} BR</i>"
                 )
 
             await tg(s, msg)
+
     except Exception as e:
         print("Erro scan_tf:", e)
 
 async def main_loop():
     async with aiohttp.ClientSession() as s:
-        await tg(s, "<b>V21.3L SINCRONIZADO (1H, 4H, 12H, 1D)</b>\nCOOLDOWN AJUSTADO + BB 1H + NOMES SEM USDT")
+        await tg(s, "<b>V21.3L FIXED — ALERTAS RESTAURADOS</b>\n1H + 4H + 12H + 1D | COOLDOWN AJUSTADO | RENDER SAFE")
         while True:
             try:
                 data = await (await s.get(f"{BINANCE}/api/v3/ticker/24hr")).json()

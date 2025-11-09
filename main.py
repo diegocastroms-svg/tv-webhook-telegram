@@ -1,4 +1,4 @@
-# main_long.py — V21.7L CONFLUENCE+ (1H força real + Layout Telegram Real)
+# main_long.py — V21.8L CLEANFLOW (Bloqueio de Moedas Mortas + Força Real 1H)
 import os, asyncio, aiohttp, time
 from datetime import datetime, timedelta, timezone
 from flask import Flask
@@ -7,7 +7,7 @@ import threading, statistics
 app = Flask(__name__)
 @app.route("/")
 def home():
-    return "V21.7L CONFLUENCE+ TENDÊNCIA LONGA ATIVO", 200
+    return "V21.8L CLEANFLOW TENDÊNCIA LONGA ATIVO", 200
 
 @app.route("/health")
 def health():
@@ -16,6 +16,8 @@ def health():
 BINANCE = "https://api.binance.com"
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
 CHAT_ID = os.getenv("CHAT_ID", "").strip()
+
+EXCLUDE = ["USDC", "USDP", "FDUSD", "TUSD", "USDE", "BUSD", "DAI", "EUR", "TRY", "BRL"]
 
 def now_br():
     return (datetime.now(timezone.utc) - timedelta(hours=3)).strftime("%H:%M")
@@ -92,10 +94,17 @@ async def scan_tf(s, sym, tf):
         vol24 = float(t["quoteVolume"])
         if vol24 < 5_000_000: return
 
+        # Filtro extra: ignora pares mortos ou inativos
+        tbq = float(t.get("takerBuyQuoteAssetVolume", 0.0))
+        if tbq / (vol24 + 1e-12) < 0.20:
+            return  # sem fluxo real
+        if any(x in sym for x in EXCLUDE):
+            return  # moeda morta ou estável
+
         k = await klines(s, sym, tf, 100)
         if len(k) < 50: return
         close = [float(x[4]) for x in k]
-        vol_quote = [float(x[7]) for x in k]  # quote asset volume por candle
+        vol_quote = [float(x[7]) for x in k]
 
         ema9_prev = ema(close[:-1], 9)
         ema20_prev = ema(close[:-1], 20)
@@ -106,11 +115,9 @@ async def scan_tf(s, sym, tf):
         ema9_atual = ema9_prev[-1] * (1 - alpha9) + close[-1] * alpha9
         ema20_atual = ema20_prev[-1] * (1 - alpha20) + close[-1] * alpha20
 
-        # Gatilho em tempo real (sem esperar vela fechar)
         cruzamento_agora = ema9_prev[-1] <= ema20_prev[-1] and ema9_atual > ema20_atual
         if not cruzamento_agora: return
 
-        # Filtro específico do 1h — Bandas estreitas
         if tf == "1h":
             ma20 = sum(close[-20:]) / 20
             std = statistics.pstdev(close[-20:])
@@ -121,35 +128,18 @@ async def scan_tf(s, sym, tf):
         current_rsi = rsi(close)
         if current_rsi < 40 or current_rsi > 80: return
 
-        # =========================
-        # CONFLUÊNCIAS — SOMENTE 1H
-        # =========================
         if tf == "1h":
-            # volume_strength (% acima da média composta MA9/MA21 do volume em QUOTE)
             ma9_v = sum(vol_quote[-9:]) / 9
             ma21_v = sum(vol_quote[-21:]) / 21
             base_v = (ma9_v + ma21_v) / 2 or 1e-12
             volume_strength = (vol_quote[-1] / base_v) * 100
-
-            # momentum_confluence (RSI, MACD hist, volume_strength)
             macd_h = macd_histogram(close)
             momentum_confluence = ((current_rsi - 50) * 1.2) + (macd_h * 100) + ((volume_strength - 100) * 0.5)
-
-            # real_money_flow (takers compradores vs vendedores, em QUOTE)
-            tbq = float(t.get("takerBuyQuoteAssetVolume", 0.0))
-            total_q = float(t.get("quoteVolume", 0.0)) or 1e-12
-            sellers_q = max(total_q - tbq, 1e-12)
+            sellers_q = max(vol24 - tbq, 1e-12)
             real_money_flow = (tbq / sellers_q) * 100
-
-            # thresholds
-            if volume_strength < 120:  # precisa de 20% acima da média
-                return
-            if momentum_confluence <= 0:  # exige confluência positiva
-                return
-            if real_money_flow < 110:  # pressão compradora ≥ 10% acima dos vendedores
+            if volume_strength < 120 or momentum_confluence <= 0 or real_money_flow < 110:
                 return
 
-        # Probabilidade (mantida)
         prob = min(98, max(60, 70 + (current_rsi - 50) * 0.8))
         stop = min(float(x[3]) for x in k[-10:]) * 0.98
         alvo1 = p * 1.08
@@ -188,7 +178,7 @@ async def scan_tf(s, sym, tf):
 
 async def main_loop():
     async with aiohttp.ClientSession() as s:
-        await tg(s, "<b>V21.7L CONFLUENCE+ — 1H com Força Real (volume/momentum/flow)</b>\n<b>1H + 4H + 12H + 1D | Gatilhos Instantâneos | Layout Telegram Real</b>")
+        await tg(s, "<b>V21.8L CLEANFLOW — Bloqueio de Moedas Mortas + 1H Força Real Ativo</b>")
         while True:
             try:
                 data = await (await s.get(f"{BINANCE}/api/v3/ticker/24hr")).json()
@@ -196,14 +186,13 @@ async def main_loop():
                     d["symbol"] for d in data
                     if d["symbol"].endswith("USDT")
                     and float(d["quoteVolume"]) > 5_000_000
-                    and not any(x in d["symbol"] for x in ["UP", "DOWN"])
+                    and not any(x in d["symbol"] for x in EXCLUDE)
                 ]
                 symbols = sorted(
                     symbols,
                     key=lambda x: next((float(t["quoteVolume"]) for t in data if t["symbol"] == x), 0),
                     reverse=True
                 )[:100]
-
                 tasks = []
                 for sym in symbols:
                     tasks.append(scan_tf(s, sym, "1h"))

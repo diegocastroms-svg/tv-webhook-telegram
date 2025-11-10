@@ -1,4 +1,4 @@
-# main_long.py — V21.8L CLEANFLOW (Bloqueio de Moedas Mortas + Força Real 1H)
+# main_long.py — V22.0L CLEANFLOW FIXED (Filtro 1H Isolado + Força Real Suave)
 import os, asyncio, aiohttp, time
 from datetime import datetime, timedelta, timezone
 from flask import Flask
@@ -7,7 +7,7 @@ import threading, statistics
 app = Flask(__name__)
 @app.route("/")
 def home():
-    return "V21.8L CLEANFLOW TENDÊNCIA LONGA ATIVO", 200
+    return "V22.0L CLEANFLOW FIXED TENDÊNCIA LONGA ATIVO", 200
 
 @app.route("/health")
 def health():
@@ -93,18 +93,13 @@ async def scan_tf(s, sym, tf):
         p = float(t["lastPrice"])
         vol24 = float(t["quoteVolume"])
         if vol24 < 5_000_000: return
-
-        # Filtro extra: ignora pares mortos ou inativos
-        tbq = float(t.get("takerBuyQuoteAssetVolume", 0.0))
-        if tbq / (vol24 + 1e-12) < 0.20:
-            return  # sem fluxo real
-        if any(x in sym for x in EXCLUDE):
-            return  # moeda morta ou estável
+        if any(x in sym for x in EXCLUDE): return
 
         k = await klines(s, sym, tf, 100)
         if len(k) < 50: return
         close = [float(x[4]) for x in k]
         vol_quote = [float(x[7]) for x in k]
+        tbq = float(t.get("takerBuyQuoteAssetVolume", 0.0))
 
         ema9_prev = ema(close[:-1], 9)
         ema20_prev = ema(close[:-1], 20)
@@ -118,17 +113,18 @@ async def scan_tf(s, sym, tf):
         cruzamento_agora = ema9_prev[-1] <= ema20_prev[-1] and ema9_atual > ema20_atual
         if not cruzamento_agora: return
 
+        current_rsi = rsi(close)
+        if current_rsi < 40 or current_rsi > 80: return
+
+        # 🔹 Filtros aplicados apenas no 1H
         if tf == "1h":
+            if tbq / (vol24 + 1e-12) < 0.12:  # fluxo real mínimo
+                return
             ma20 = sum(close[-20:]) / 20
             std = statistics.pstdev(close[-20:])
             largura = (2 * std) / ma20
             if largura > 0.045:
                 return
-
-        current_rsi = rsi(close)
-        if current_rsi < 40 or current_rsi > 80: return
-
-        if tf == "1h":
             ma9_v = sum(vol_quote[-9:]) / 9
             ma21_v = sum(vol_quote[-21:]) / 21
             base_v = (ma9_v + ma21_v) / 2 or 1e-12
@@ -137,7 +133,7 @@ async def scan_tf(s, sym, tf):
             momentum_confluence = ((current_rsi - 50) * 1.2) + (macd_h * 100) + ((volume_strength - 100) * 0.5)
             sellers_q = max(vol24 - tbq, 1e-12)
             real_money_flow = (tbq / sellers_q) * 100
-            if volume_strength < 120 or momentum_confluence <= 0 or real_money_flow < 110:
+            if volume_strength < 110 or momentum_confluence <= 0 or real_money_flow < 105:
                 return
 
         prob = min(98, max(60, 70 + (current_rsi - 50) * 0.8))
@@ -178,7 +174,7 @@ async def scan_tf(s, sym, tf):
 
 async def main_loop():
     async with aiohttp.ClientSession() as s:
-        await tg(s, "<b>V21.8L CLEANFLOW — Bloqueio de Moedas Mortas + 1H Força Real Ativo</b>")
+        await tg(s, "<b>V22.0L CLEANFLOW FIXED — Filtro 1H Isolado</b>\n<b>Todos os timeframes ativos | Layout Telegram Real</b>")
         while True:
             try:
                 data = await (await s.get(f"{BINANCE}/api/v3/ticker/24hr")).json()

@@ -95,30 +95,50 @@ async def scan_tf(s, sym, tf):
         if vol24 < 5_000_000: return
         if any(x in sym for x in EXCLUDE): return
 
-        k = await klines(s, sym, tf, 100)
+        k = await klines(s, sym, tf, 250)
         if len(k) < 50: return
         close = [float(x[4]) for x in k]
         vol_quote = [float(x[7]) for x in k]
         tbq = float(t.get("takerBuyQuoteAssetVolume", 0.0))
 
-        ema9_prev = ema(close[:-1], 9)
-        ema20_prev = ema(close[:-1], 20)
-        if len(ema9_prev) < 2 or len(ema20_prev) < 2: return
+        # 🔹 ALTERAÇÃO SOMENTE NO 1H
+        if tf == "1h":
+            if len(close) < 201:
+                return
 
-        alpha9 = 2 / (9 + 1)
-        alpha20 = 2 / (20 + 1)
-        ema9_atual = ema9_prev[-1] * (1 - alpha9) + close[-1] * alpha9
-        ema20_atual = ema20_prev[-1] * (1 - alpha20) + close[-1] * alpha20
+            ma50_prev = sum(close[-51:-1]) / 50
+            ma200_prev = sum(close[-201:-1]) / 200
+            ma50_atual = sum(close[-50:]) / 50
+            ma200_atual = sum(close[-200:]) / 200
 
-        cruzamento_agora = ema9_prev[-1] <= ema20_prev[-1] and ema9_atual > ema20_atual
-        if not cruzamento_agora: return
+            cruzou = (
+                (ma50_prev <= ma200_prev and ma50_atual > ma200_atual) or
+                (ma50_prev >= ma200_prev and ma50_atual < ma200_atual)
+            )
+
+            if not cruzou:
+                return
+
+        else:
+            ema9_prev = ema(close[:-1], 9)
+            ema20_prev = ema(close[:-1], 20)
+            if len(ema9_prev) < 2 or len(ema20_prev) < 2:
+                return
+
+            alpha9 = 2 / (9 + 1)
+            alpha20 = 2 / (20 + 1)
+            ema9_atual = ema9_prev[-1] * (1 - alpha9) + close[-1] * alpha9
+            ema20_atual = ema20_prev[-1] * (1 - alpha20) + close[-1] * alpha20
+
+            cruzamento_agora = ema9_prev[-1] <= ema20_prev[-1] and ema9_atual > ema20_atual
+            if not cruzamento_agora:
+                return
 
         current_rsi = rsi(close)
         if current_rsi < 40 or current_rsi > 80: return
 
-        # 🔹 Filtros aplicados apenas no 1H
         if tf == "1h":
-            if tbq / (vol24 + 1e-12) < 0.12:  # fluxo real mínimo
+            if tbq / (vol24 + 1e-12) < 0.12:
                 return
             ma20 = sum(close[-20:]) / 20
             std = statistics.pstdev(close[-20:])
@@ -144,7 +164,7 @@ async def scan_tf(s, sym, tf):
 
         if can_alert(tf, sym):
             if tf == "1h":
-                titulo = "<b>🌕 ALERTA DINÂMICO 1H 🔶</b>\n\n<b>Cruzamento EMA9/MA20 + Bandas Estreitas</b>"
+                titulo = "<b>🌕 ALERTA DINÂMICO 1H 🔶</b>\n\n<b>MA50 x MA200 — Cruzamento Detectado</b>"
             elif tf == "4h":
                 titulo = "<b>📊 TENDÊNCIA LONGA 4H 🔥🟣</b>\n\n<b>EMA9 CROSS CONFIRMADO — Continuidade de tendência</b>"
             elif tf == "12h":

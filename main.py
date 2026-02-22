@@ -62,7 +62,7 @@ def macd_histogram(prices):
     hist = macd_line[-1] - signal[-1]
     return hist
 
-async def klines(s, sym, tf, lim=100):
+async def klines(s, sym, tf, lim=250):
     url = f"{BINANCE}/api/v3/klines?symbol={sym}&interval={tf}&limit={lim}"
     async with s.get(url, timeout=10) as r:
         return await r.json() if r.status == 200 else []
@@ -98,10 +98,7 @@ async def scan_tf(s, sym, tf):
         k = await klines(s, sym, tf, 250)
         if len(k) < 50: return
         close = [float(x[4]) for x in k]
-        vol_quote = [float(x[7]) for x in k]
-        tbq = float(t.get("takerBuyQuoteAssetVolume", 0.0))
 
-        # 🔹 ALTERAÇÃO SOMENTE NO 1H
         if tf == "1h":
             if len(close) < 201:
                 return
@@ -135,26 +132,8 @@ async def scan_tf(s, sym, tf):
                 return
 
         current_rsi = rsi(close)
-        if current_rsi < 40 or current_rsi > 80: return
-
-        if tf == "1h":
-            if tbq / (vol24 + 1e-12) < 0.12:
-                return
-            ma20 = sum(close[-20:]) / 20
-            std = statistics.pstdev(close[-20:])
-            largura = (2 * std) / ma20
-            if largura > 0.045:
-                return
-            ma9_v = sum(vol_quote[-9:]) / 9
-            ma21_v = sum(vol_quote[-21:]) / 21
-            base_v = (ma9_v + ma21_v) / 2 or 1e-12
-            volume_strength = (vol_quote[-1] / base_v) * 100
-            macd_h = macd_histogram(close)
-            momentum_confluence = ((current_rsi - 50) * 1.2) + (macd_h * 100) + ((volume_strength - 100) * 0.5)
-            sellers_q = max(vol24 - tbq, 1e-12)
-            real_money_flow = (tbq / sellers_q) * 100
-            if volume_strength < 110 or momentum_confluence <= 0 or real_money_flow < 105:
-                return
+        if current_rsi < 40 or current_rsi > 80:
+            return
 
         prob = min(98, max(60, 70 + (current_rsi - 50) * 0.8))
         stop = min(float(x[3]) for x in k[-10:]) * 0.98
@@ -164,7 +143,7 @@ async def scan_tf(s, sym, tf):
 
         if can_alert(tf, sym):
             if tf == "1h":
-                titulo = "<b>🌕 ALERTA DINÂMICO 1H 🔶</b>\n\n<b>MA50 x MA200 — Cruzamento Detectado</b>"
+                titulo = "<b>🌕 ALERTA 1H 🔶</b>\n\n<b>MA50 x MA200 — Cruzamento Detectado</b>"
             elif tf == "4h":
                 titulo = "<b>📊 TENDÊNCIA LONGA 4H 🔥🟣</b>\n\n<b>EMA9 CROSS CONFIRMADO — Continuidade de tendência</b>"
             elif tf == "12h":
@@ -194,7 +173,7 @@ async def scan_tf(s, sym, tf):
 
 async def main_loop():
     async with aiohttp.ClientSession() as s:
-        await tg(s, "<b>V22.0L CLEANFLOW FIXED — Filtro 1H Isolado</b>\n<b>Todos os timeframes ativos | Layout Telegram Real</b>")
+        await tg(s, "<b>V22.0L CLEANFLOW FIXED — 1H Simplificado</b>")
         while True:
             try:
                 data = await (await s.get(f"{BINANCE}/api/v3/ticker/24hr")).json()

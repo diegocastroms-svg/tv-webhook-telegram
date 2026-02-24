@@ -53,15 +53,6 @@ def rsi(prices, p=14):
     ag, al = sum(g) / p, sum(l) / p or 1e-12
     return 100 - 100 / (1 + ag / al)
 
-def macd_histogram(prices):
-    if len(prices) < 35: return 0.0
-    ema12 = ema(prices, 12)
-    ema26 = ema(prices, 26)
-    macd_line = [a - b for a, b in zip(ema12[-len(ema26):], ema26)]
-    signal = ema(macd_line, 9)
-    hist = macd_line[-1] - signal[-1]
-    return hist
-
 async def klines(s, sym, tf, lim=250):
     url = f"{BINANCE}/api/v3/klines?symbol={sym}&interval={tf}&limit={lim}"
     async with s.get(url, timeout=10) as r:
@@ -79,7 +70,7 @@ cooldown_1d = {}
 
 def can_alert(tf, sym):
     cd = cooldown_1h if tf == "1h" else cooldown_4h if tf == "4h" else cooldown_12h if tf == "12h" else cooldown_1d
-    cooldown_time = 1800 if tf == "1h" else 7200 if tf == "4h" else 14400 if tf == "12h" else 21600
+    cooldown_time = 3600 if tf == "1h" else 7200 if tf == "4h" else 14400 if tf == "12h" else 21600
     n = time.time()
     if n - cd.get(sym, 0) >= cooldown_time:
         cd[sym] = n
@@ -96,24 +87,24 @@ async def scan_tf(s, sym, tf):
         if any(x in sym for x in EXCLUDE): return
 
         k = await klines(s, sym, tf, 250)
-        if len(k) < 50: return
+        if len(k) < 200: return
         close = [float(x[4]) for x in k]
 
         if tf == "1h":
-            if len(close) < 201:
-                return
-
+            ma9_prev = sum(close[-10:-1]) / 9
+            ma20_prev = sum(close[-21:-1]) / 20
             ma50_prev = sum(close[-51:-1]) / 50
             ma200_prev = sum(close[-201:-1]) / 200
-            ma50_atual = sum(close[-50:]) / 50
-            ma200_atual = sum(close[-200:]) / 200
 
-            cruzou = (
-                (ma50_prev <= ma200_prev and ma50_atual > ma200_atual) or
-                (ma50_prev >= ma200_prev and ma50_atual < ma200_atual)
-            )
+            ma9_now = sum(close[-9:]) / 9
+            ma20_now = sum(close[-20:]) / 20
+            ma50_now = sum(close[-50:]) / 50
+            ma200_now = sum(close[-200:]) / 200
 
-            if not cruzou:
+            alinhado_antes = ma9_prev > ma20_prev > ma50_prev > ma200_prev
+            alinhado_agora = ma9_now > ma20_now > ma50_now > ma200_now
+
+            if not (not alinhado_antes and alinhado_agora):
                 return
 
         else:
@@ -143,7 +134,7 @@ async def scan_tf(s, sym, tf):
 
         if can_alert(tf, sym):
             if tf == "1h":
-                titulo = "<b>🌕 ALERTA 1H 🔶</b>\n\n<b>MA50 x MA200 — Cruzamento Detectado</b>"
+                titulo = "<b>🌕 ALERTA 1H 🔶</b>\n\n<b>Alinhamento Recém-Formado MA9 > MA20 > MA50 > MA200</b>"
             elif tf == "4h":
                 titulo = "<b>📊 TENDÊNCIA LONGA 4H 🔥🟣</b>\n\n<b>EMA9 CROSS CONFIRMADO — Continuidade de tendência</b>"
             elif tf == "12h":
@@ -173,7 +164,7 @@ async def scan_tf(s, sym, tf):
 
 async def main_loop():
     async with aiohttp.ClientSession() as s:
-        await tg(s, "<b>V22.0L CLEANFLOW FIXED — 1H Simplificado</b>")
+        await tg(s, "<b>V22.0L CLEANFLOW FIXED — 1H Alinhamento Recém-Formado</b>")
         while True:
             try:
                 data = await (await s.get(f"{BINANCE}/api/v3/ticker/24hr")).json()

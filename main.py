@@ -87,7 +87,7 @@ async def scan_tf(s, sym, tf):
         if any(x in sym for x in EXCLUDE): return
 
         k = await klines(s, sym, tf, 250)
-        if len(k) < 200: return
+        if len(k) < 50: return
         close = [float(x[4]) for x in k]
 
         if tf == "15m":
@@ -95,18 +95,16 @@ async def scan_tf(s, sym, tf):
             ma9_prev = sum(close[-10:-1]) / 9
             ma20_prev = sum(close[-21:-1]) / 20
             ma50_prev = sum(close[-51:-1]) / 50
-            ma200_prev = sum(close[-201:-1]) / 200
 
             ma9_now = sum(close[-9:]) / 9
             ma20_now = sum(close[-20:]) / 20
             ma50_now = sum(close[-50:]) / 50
-            ma200_now = sum(close[-200:]) / 200
 
-            alta_antes = ma9_prev > ma20_prev > ma50_prev > ma200_prev
-            alta_agora = ma9_now > ma20_now > ma50_now > ma200_now
+            alta_antes = ma9_prev > ma20_prev > ma50_prev
+            alta_agora = ma9_now > ma20_now > ma50_now
 
-            baixa_antes = ma9_prev < ma20_prev < ma50_prev < ma200_prev
-            baixa_agora = ma9_now < ma20_now < ma50_now < ma200_now
+            baixa_antes = ma9_prev < ma20_prev < ma50_prev
+            baixa_agora = ma9_now < ma20_now < ma50_now
 
             formou_alta = not alta_antes and alta_agora
             formou_baixa = not baixa_antes and baixa_agora

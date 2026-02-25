@@ -1,4 +1,4 @@
-# main_long.py — V22.0L CLEANFLOW FIXED (Filtro 1H Isolado + Força Real Suave)
+# main_long.py — V22.0L CLEANFLOW FIXED (15M Alinhamento Direcional)
 import os, asyncio, aiohttp, time
 from datetime import datetime, timedelta, timezone
 from flask import Flask
@@ -63,14 +63,14 @@ async def ticker(s, sym):
     async with s.get(url, timeout=10) as r:
         return await r.json() if r.status == 200 else None
 
-cooldown_1h = {}
+cooldown_15m = {}
 cooldown_4h = {}
 cooldown_12h = {}
 cooldown_1d = {}
 
 def can_alert(tf, sym):
-    cd = cooldown_1h if tf == "1h" else cooldown_4h if tf == "4h" else cooldown_12h if tf == "12h" else cooldown_1d
-    cooldown_time = 3600 if tf == "1h" else 7200 if tf == "4h" else 14400 if tf == "12h" else 21600
+    cd = cooldown_15m if tf == "15m" else cooldown_4h if tf == "4h" else cooldown_12h if tf == "12h" else cooldown_1d
+    cooldown_time = 1800 if tf == "15m" else 7200 if tf == "4h" else 14400 if tf == "12h" else 21600
     n = time.time()
     if n - cd.get(sym, 0) >= cooldown_time:
         cd[sym] = n
@@ -90,7 +90,8 @@ async def scan_tf(s, sym, tf):
         if len(k) < 200: return
         close = [float(x[4]) for x in k]
 
-        if tf == "1h":
+        if tf == "15m":
+
             ma9_prev = sum(close[-10:-1]) / 9
             ma20_prev = sum(close[-21:-1]) / 20
             ma50_prev = sum(close[-51:-1]) / 50
@@ -101,11 +102,19 @@ async def scan_tf(s, sym, tf):
             ma50_now = sum(close[-50:]) / 50
             ma200_now = sum(close[-200:]) / 200
 
-            alinhado_antes = ma9_prev > ma20_prev > ma50_prev > ma200_prev
-            alinhado_agora = ma9_now > ma20_now > ma50_now > ma200_now
+            alta_antes = ma9_prev > ma20_prev > ma50_prev > ma200_prev
+            alta_agora = ma9_now > ma20_now > ma50_now > ma200_now
 
-            if not (not alinhado_antes and alinhado_agora):
+            baixa_antes = ma9_prev < ma20_prev < ma50_prev < ma200_prev
+            baixa_agora = ma9_now < ma20_now < ma50_now < ma200_now
+
+            formou_alta = not alta_antes and alta_agora
+            formou_baixa = not baixa_antes and baixa_agora
+
+            if not (formou_alta or formou_baixa):
                 return
+
+            direcao = "🔼 SUBINDO" if formou_alta else "🔽 CAINDO"
 
         else:
             ema9_prev = ema(close[:-1], 9)
@@ -133,8 +142,9 @@ async def scan_tf(s, sym, tf):
         nome = sym[:-4]
 
         if can_alert(tf, sym):
-            if tf == "1h":
-                titulo = "<b>🌕 ALERTA 1H 🔶</b>\n\n<b>Alinhamento Recém-Formado MA9 > MA20 > MA50 > MA200</b>"
+
+            if tf == "15m":
+                titulo = f"<b>🌕 ALERTA 15M 🔶</b>\n\n<b>Alinhamento Recém-Formado — {direcao}</b>"
             elif tf == "4h":
                 titulo = "<b>📊 TENDÊNCIA LONGA 4H 🔥🟣</b>\n\n<b>EMA9 CROSS CONFIRMADO — Continuidade de tendência</b>"
             elif tf == "12h":
@@ -157,6 +167,7 @@ async def scan_tf(s, sym, tf):
                 f"<b>──────────────────────────</b>\n"
                 f"<b>⏱️ {now_br()} BR</b>"
             )
+
             await tg(s, msg)
 
     except Exception as e:
@@ -164,7 +175,7 @@ async def scan_tf(s, sym, tf):
 
 async def main_loop():
     async with aiohttp.ClientSession() as s:
-        await tg(s, "<b>V22.0L CLEANFLOW FIXED — 1H Alinhamento Recém-Formado</b>")
+        await tg(s, "<b>V22.0L CLEANFLOW FIXED — 15M Direcional</b>")
         while True:
             try:
                 data = await (await s.get(f"{BINANCE}/api/v3/ticker/24hr")).json()
@@ -181,7 +192,7 @@ async def main_loop():
                 )[:100]
                 tasks = []
                 for sym in symbols:
-                    tasks.append(scan_tf(s, sym, "1h"))
+                    tasks.append(scan_tf(s, sym, "15m"))
                     tasks.append(scan_tf(s, sym, "4h"))
                     tasks.append(scan_tf(s, sym, "12h"))
                     tasks.append(scan_tf(s, sym, "1d"))

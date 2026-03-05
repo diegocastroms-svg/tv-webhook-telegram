@@ -14,7 +14,7 @@ def health():
     return "OK",200
 
 
-BINANCE="https://api.binance.com"
+BINANCE="https://fapi.binance.com"
 TELEGRAM_TOKEN=os.getenv("TELEGRAM_TOKEN","").strip()
 CHAT_ID=os.getenv("CHAT_ID","").strip()
 
@@ -39,24 +39,25 @@ async def tg(s,msg):
         print("Erro Telegram:",e)
 
 
-def ema(data,p):
+def ma(data,p):
 
     if not data: return []
 
-    a=2/(p+1)
-    e=data[0]
-    out=[e]
+    out=[]
 
-    for x in data[1:]:
-        e=a*x+(1-a)*e
-        out.append(e)
+    for i in range(len(data)):
+        if i+1<p:
+            out.append(data[i])
+        else:
+            w=data[i+1-p:i+1]
+            out.append(sum(w)/p)
 
     return out
 
 
 async def klines(s,sym,tf,lim=100):
 
-    url=f"{BINANCE}/api/v3/klines?symbol={sym}&interval={tf}&limit={lim}"
+    url=f"{BINANCE}/fapi/v1/klines?symbol={sym}&interval={tf}&limit={lim}"
 
     async with s.get(url,timeout=10) as r:
         return await r.json() if r.status==200 else []
@@ -64,7 +65,7 @@ async def klines(s,sym,tf,lim=100):
 
 async def ticker(s,sym):
 
-    url=f"{BINANCE}/api/v3/ticker/24hr?symbol={sym}"
+    url=f"{BINANCE}/fapi/v1/ticker/24hr?symbol={sym}"
 
     async with s.get(url,timeout=10) as r:
         return await r.json() if r.status==200 else None
@@ -75,11 +76,13 @@ cooldowns={}
 
 def can_alert(tf,sym):
 
+    if tf=="15m":
+        return True
+
     key=f"{tf}_{sym}"
     cd=cooldowns.get(key,0)
 
-    if tf=="15m": cooldown_time=900
-    elif tf=="4h": cooldown_time=7200
+    if tf=="4h": cooldown_time=7200
     elif tf=="1d": cooldown_time=21600
     else: cooldown_time=86400
 
@@ -90,15 +93,6 @@ def can_alert(tf,sym):
         return True
 
     return False
-
-
-
-def alinhado_alta(ma9,ma20,ma50,i):
-    return ma9[i]>ma20[i]>ma50[i]
-
-
-def alinhado_baixa(ma9,ma20,ma50,i):
-    return ma9[i]<ma20[i]<ma50[i]
 
 
 
@@ -121,19 +115,21 @@ async def scan_tf(s,sym,tf):
 
         close=[float(x[4]) for x in k]
 
-        ma9=ema(close,9)
-        ma20=ema(close,20)
-        ma50=ema(close,50)
+        ma9=ma(close,9)
+        ma20=ma(close,20)
+        ma50=ma(close,50)
 
-        alta_now=alinhado_alta(ma9,ma20,ma50,-1)
-        alta_prev=alinhado_alta(ma9,ma20,ma50,-2)
+        ma9_now=ma9[-1]
+        ma20_now=ma20[-1]
+        ma50_now=ma50[-1]
 
-        baixa_now=alinhado_baixa(ma9,ma20,ma50,-1)
-        baixa_prev=alinhado_baixa(ma9,ma20,ma50,-2)
+        ma9_prev=ma9[-2]
+        ma20_prev=ma20[-2]
 
         nome=sym[:-4]
 
-        if alta_now and not alta_prev:
+        # ALTA: MA9 cruza acima da MA20 com MA20 acima da MA50
+        if ma9_now>ma20_now and ma20_now>ma50_now and ma9_prev<=ma20_prev:
 
             if can_alert(tf,sym):
 
@@ -149,7 +145,8 @@ async def scan_tf(s,sym,tf):
                 await tg(s,msg)
 
 
-        if baixa_now and not baixa_prev:
+        # BAIXA: MA9 cruza abaixo da MA20 com MA20 abaixo da MA50
+        if ma9_now<ma20_now and ma20_now<ma50_now and ma9_prev>=ma20_prev:
 
             if can_alert(tf,sym):
 
@@ -180,7 +177,7 @@ async def main_loop():
 
             try:
 
-                data=await (await s.get(f"{BINANCE}/api/v3/ticker/24hr")).json()
+                data=await (await s.get(f"{BINANCE}/fapi/v1/ticker/24hr")).json()
 
                 symbols=[
                     d["symbol"] for d in data

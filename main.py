@@ -98,12 +98,10 @@ def can_alert(tf,sym):
 
 
 def alinhado_alta(ma9,ma20,ma50,i):
-
     return ma9[i]>ma20[i]>ma50[i]
 
 
 def alinhado_baixa(ma9,ma20,ma50,i):
-
     return ma9[i]<ma20[i]<ma50[i]
 
 
@@ -131,14 +129,25 @@ async def scan_tf(s,sym,tf):
         ma20=ema(close,20)
         ma50=ema(close,50)
 
-        # estado atual
-        alta_now=alinhado_alta(ma9,ma20,ma50,-1)
-        baixa_now=alinhado_baixa(ma9,ma20,ma50,-1)
+        ma9_now=ma9[-1]
+        ma9_prev=ma9[-2]
+
+        ma20_now=ma20[-1]
+        ma20_prev=ma20[-2]
+
+        # inclinação mínima adicionada
+        ma9_up = ma9_now > ma9_prev * 1.0002
+        ma20_up = ma20_now > ma20_prev * 1.0001
+
+        ma9_down = ma9_now < ma9_prev * 0.9998
+        ma20_down = ma20_now < ma20_prev * 0.9999
+
+        alta_now=alinhado_alta(ma9,ma20,ma50,-1) and ma9_up and ma20_up
+        baixa_now=alinhado_baixa(ma9,ma20,ma50,-1) and ma9_down and ma20_down
 
         if not alta_now and not baixa_now:
             return
 
-        # verificar alinhamento recente (até 3 velas atrás)
 
         recente=False
 

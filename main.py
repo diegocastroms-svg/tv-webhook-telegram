@@ -1,4 +1,3 @@
-# SCANNER MÉDIAS 9/20/50 COM ALINHAMENTO RECENTE
 import os, asyncio, aiohttp, time
 from datetime import datetime, timedelta, timezone
 from flask import Flask
@@ -8,7 +7,7 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "SCANNER MÉDIAS ATIVO",200
+    return "SCANNER MÉDIAS 9 20 50",200
 
 @app.route("/health")
 def health():
@@ -21,10 +20,8 @@ CHAT_ID=os.getenv("CHAT_ID","").strip()
 
 EXCLUDE=["USDC","USDP","FDUSD","TUSD","USDE","BUSD","DAI","EUR","TRY","BRL"]
 
-
 def now_br():
     return (datetime.now(timezone.utc)-timedelta(hours=3)).strftime("%H:%M")
-
 
 async def tg(s,msg):
 
@@ -75,7 +72,6 @@ async def ticker(s,sym):
 
 
 cooldowns={}
-
 
 def can_alert(tf,sym):
 
@@ -129,65 +125,44 @@ async def scan_tf(s,sym,tf):
         ma20=ema(close,20)
         ma50=ema(close,50)
 
-        ma9_now=ma9[-1]
-        ma9_prev=ma9[-2]
+        alta_now=alinhado_alta(ma9,ma20,ma50,-1)
+        alta_prev=alinhado_alta(ma9,ma20,ma50,-2)
 
-        ma20_now=ma20[-1]
-        ma20_prev=ma20[-2]
-
-        # inclinação mínima adicionada
-        ma9_up = ma9_now > ma9_prev * 1.0002
-        ma20_up = ma20_now > ma20_prev * 1.0001
-
-        ma9_down = ma9_now < ma9_prev * 0.9998
-        ma20_down = ma20_now < ma20_prev * 0.9999
-
-        alta_now=alinhado_alta(ma9,ma20,ma50,-1) and ma9_up and ma20_up
-        baixa_now=alinhado_baixa(ma9,ma20,ma50,-1) and ma9_down and ma20_down
-
-        if not alta_now and not baixa_now:
-            return
-
-
-        recente=False
-
-        for i in range(2,5):
-
-            if alta_now and not alinhado_alta(ma9,ma20,ma50,-i):
-                recente=True
-
-            if baixa_now and not alinhado_baixa(ma9,ma20,ma50,-i):
-                recente=True
-
-        if not recente:
-            return
-
+        baixa_now=alinhado_baixa(ma9,ma20,ma50,-1)
+        baixa_prev=alinhado_baixa(ma9,ma20,ma50,-2)
 
         nome=sym[:-4]
 
+        if alta_now and not alta_prev:
 
-        if can_alert(tf,sym):
+            if can_alert(tf,sym):
 
-            if alta_now:
-                direcao="🔼 SUBINDO"
-            else:
-                direcao="🔽 CAINDO"
+                msg=(
+                    f"<b>🟢 ALERTA {tf.upper()}</b>\n\n"
+                    f"<b>SUBINDO</b>\n\n"
+                    f"<b>{nome}</b>\n"
+                    f"💰 Preço: {p:.6f}\n"
+                    f"💵 Volume 24h: ${vol24:,.0f}\n\n"
+                    f"⏱️ {now_br()} BR"
+                )
+
+                await tg(s,msg)
 
 
-            titulo=f"<b>📊 ALERTA {tf.upper()}</b>\n\n<b>Alinhamento Recente — {direcao}</b>"
+        if baixa_now and not baixa_prev:
 
+            if can_alert(tf,sym):
 
-            msg=(
-                f"{titulo}\n\n"
-                f"<b>{nome}</b>\n"
-                f"<b>──────────────────────────</b>\n"
-                f"<b>💰 Preço: {p:.6f}</b>\n"
-                f"<b>💵 Volume 24h: ${vol24:,.0f}</b>\n"
-                f"<b>──────────────────────────</b>\n"
-                f"<b>⏱️ {now_br()} BR</b>"
-            )
+                msg=(
+                    f"<b>🔴 ALERTA {tf.upper()}</b>\n\n"
+                    f"<b>CAINDO</b>\n\n"
+                    f"<b>{nome}</b>\n"
+                    f"💰 Preço: {p:.6f}\n"
+                    f"💵 Volume 24h: ${vol24:,.0f}\n\n"
+                    f"⏱️ {now_br()} BR"
+                )
 
-            await tg(s,msg)
+                await tg(s,msg)
 
 
     except Exception as e:
@@ -214,7 +189,6 @@ async def main_loop():
                     and not any(x in d["symbol"] for x in EXCLUDE)
                 ]
 
-
                 symbols=sorted(
                     symbols,
                     key=lambda x: next((float(t["quoteVolume"]) for t in data if t["symbol"]==x),0),
@@ -239,13 +213,11 @@ async def main_loop():
             except Exception as e:
                 print("Erro main_loop:",e)
 
-
             await asyncio.sleep(60)
 
 
 
 threading.Thread(target=lambda: asyncio.run(main_loop()),daemon=True).start()
-
 
 if __name__=="__main__":
 

@@ -212,7 +212,7 @@ async def main_loop():
                 d["symbol"]
                 for d in data
                 if d["symbol"].endswith("USDT")
-                and float(d["quoteVolume"])>5_000_000
+                and float(d["quoteVolume"])>1_000_000
                 and not any(x in d["symbol"] for x in EXCLUDE)
                 ]
 
@@ -220,7 +220,7 @@ async def main_loop():
                 symbols,
                 key=lambda x:next((float(t["quoteVolume"]) for t in data if t["symbol"]==x),0),
                 reverse=True
-                )[:150]
+                )[:300]
 
 
                 tasks=[]
@@ -248,3 +248,4 @@ if __name__=="__main__":
     port=int(os.environ.get("PORT") or 10000)
 
     app.run(host="0.0.0.0",port=port)
+

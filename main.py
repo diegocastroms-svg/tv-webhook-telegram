@@ -20,6 +20,15 @@ CHAT_ID=os.getenv("CHAT_ID","").strip()
 
 EXCLUDE=["USDC","USDP","FDUSD","TUSD","USDE","BUSD","DAI","EUR","TRY","BRL"]
 
+TF_COLOR={
+"15m":"🟦",
+"4h":"🟩",
+"1d":"🟨",
+"3d":"🟧",
+"1w":"🟥",
+"1M":"🟪"
+}
+
 def now_br():
     return (datetime.now(timezone.utc)-timedelta(hours=3)).strftime("%H:%M")
 
@@ -125,16 +134,19 @@ async def scan_tf(s,sym,tf):
 
         ma9_prev=ma9[-2]
         ma20_prev=ma20[-2]
+        ma50_prev=ma50[-2]
 
         nome=sym[:-4]
 
-        # ALTA: MA9 cruza acima da MA20 com MA20 acima da MA50
+        cor=TF_COLOR.get(tf,"⬜")
+
+        # CRUZAMENTO 9x20 ALTA
         if ma9_now>ma20_now and ma20_now>ma50_now and ma9_prev<=ma20_prev:
 
             if can_alert(tf,sym):
 
                 msg=(
-                    f"<b>🟢 ALERTA {tf.upper()}</b>\n\n"
+                    f"{cor} <b>ALERTA {tf.upper()}</b>\n\n"
                     f"<b>SUBINDO</b>\n\n"
                     f"<b>{nome}</b>\n"
                     f"💰 Preço: {p:.6f}\n"
@@ -145,13 +157,47 @@ async def scan_tf(s,sym,tf):
                 await tg(s,msg)
 
 
-        # BAIXA: MA9 cruza abaixo da MA20 com MA20 abaixo da MA50
+        # CRUZAMENTO 20x50 ALTA
+        if ma20_now>ma50_now and ma9_now>ma50_now and ma20_prev<=ma50_prev:
+
+            if can_alert(tf,sym):
+
+                msg=(
+                    f"{cor} <b>ALERTA {tf.upper()}</b>\n\n"
+                    f"<b>SUBINDO</b>\n\n"
+                    f"<b>{nome}</b>\n"
+                    f"💰 Preço: {p:.6f}\n"
+                    f"💵 Volume 24h: ${vol24:,.0f}\n\n"
+                    f"⏱️ {now_br()} BR"
+                )
+
+                await tg(s,msg)
+
+
+        # CRUZAMENTO 9x20 BAIXA
         if ma9_now<ma20_now and ma20_now<ma50_now and ma9_prev>=ma20_prev:
 
             if can_alert(tf,sym):
 
                 msg=(
-                    f"<b>🔴 ALERTA {tf.upper()}</b>\n\n"
+                    f"{cor} <b>ALERTA {tf.upper()}</b>\n\n"
+                    f"<b>CAINDO</b>\n\n"
+                    f"<b>{nome}</b>\n"
+                    f"💰 Preço: {p:.6f}\n"
+                    f"💵 Volume 24h: ${vol24:,.0f}\n\n"
+                    f"⏱️ {now_br()} BR"
+                )
+
+                await tg(s,msg)
+
+
+        # CRUZAMENTO 20x50 BAIXA
+        if ma20_now<ma50_now and ma9_now<ma50_now and ma20_prev>=ma50_prev:
+
+            if can_alert(tf,sym):
+
+                msg=(
+                    f"{cor} <b>ALERTA {tf.upper()}</b>\n\n"
                     f"<b>CAINDO</b>\n\n"
                     f"<b>{nome}</b>\n"
                     f"💰 Preço: {p:.6f}\n"

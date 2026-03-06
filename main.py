@@ -146,9 +146,9 @@ async def scan_tf(s,sym,tf):
             if can_alert(tf,sym):
 
                 msg=(
-                    f"{cor} <b>ALERTA {tf.upper()}</b>\n\n"
-                    f"<b>SUBINDO</b>\n\n"
-                    f"<b>{nome}</b>\n"
+                    f"{cor} <b>ALERTA {tf.upper()} ⏫</b>\n\n"
+                    f"<b>🚀 SUBINDO 🚀</b>\n\n"
+                    f"<b>💎 {nome} 💎</b>\n"
                     f"💰 Preço: {p:.6f}\n"
                     f"💵 Volume 24h: ${vol24:,.0f}\n\n"
                     f"⏱️ {now_br()} BR"
@@ -163,9 +163,9 @@ async def scan_tf(s,sym,tf):
             if can_alert(tf,sym):
 
                 msg=(
-                    f"{cor} <b>ALERTA {tf.upper()}</b>\n\n"
-                    f"<b>SUBINDO</b>\n\n"
-                    f"<b>{nome}</b>\n"
+                    f"{cor} <b>ALERTA {tf.upper()} ⏫</b>\n\n"
+                    f"<b>🚀 SUBINDO 🚀</b>\n\n"
+                    f"<b>💎 {nome} 💎</b>\n"
                     f"💰 Preço: {p:.6f}\n"
                     f"💵 Volume 24h: ${vol24:,.0f}\n\n"
                     f"⏱️ {now_br()} BR"
@@ -180,9 +180,9 @@ async def scan_tf(s,sym,tf):
             if can_alert(tf,sym):
 
                 msg=(
-                    f"{cor} <b>ALERTA {tf.upper()}</b>\n\n"
-                    f"<b>CAINDO</b>\n\n"
-                    f"<b>{nome}</b>\n"
+                    f"{cor} <b>ALERTA {tf.upper()} ⏬</b>\n\n"
+                    f"<b>⚠️ CAINDO ⚠️</b>\n\n"
+                    f"<b>💎 {nome} 💎</b>\n"
                     f"💰 Preço: {p:.6f}\n"
                     f"💵 Volume 24h: ${vol24:,.0f}\n\n"
                     f"⏱️ {now_br()} BR"
@@ -197,9 +197,9 @@ async def scan_tf(s,sym,tf):
             if can_alert(tf,sym):
 
                 msg=(
-                    f"{cor} <b>ALERTA {tf.upper()}</b>\n\n"
-                    f"<b>CAINDO</b>\n\n"
-                    f"<b>{nome}</b>\n"
+                    f"{cor} <b>ALERTA {tf.upper()} ⏬</b>\n\n"
+                    f"<b>⚠️ CAINDO ⚠️</b>\n\n"
+                    f"<b>💎 {nome} 💎</b>\n"
                     f"💰 Preço: {p:.6f}\n"
                     f"💵 Volume 24h: ${vol24:,.0f}\n\n"
                     f"⏱️ {now_br()} BR"

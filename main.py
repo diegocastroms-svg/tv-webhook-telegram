@@ -91,7 +91,7 @@ async def scan_tf(s,sym):
 
         # Lógica de 3% de distância ou cruzamento
         dist = abs(p_now - ema200) / ema200
-        perto = dist <= 0.03
+        perto = dist <= 0.25
         cruzou = (p_prev < ema200 <= p_now) or (p_prev > ema200 >= p_now)
 
         if not (perto or cruzou): return

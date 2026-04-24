@@ -106,7 +106,7 @@ async def scan_tf(s,sym):
 
             if p_now >= bb_up_now and bb_up_now > bb_up_prev:
                 if can_alert(sym):
-                    msg=(f"🟩⏫ <b>ALERTA DIÁRIO LONG</b>\n\n"
+                    msg=(f"🟩⏫ <b>DIÁRIO LONG</b>\n\n"
                          f"<b>💎 {nome} 💎</b>\n"
                          f"💰 Preço: {p_now:.6f}\n"
                          f"📏 Dist. EMA 200: {dist:.2%}\n"
@@ -115,7 +115,7 @@ async def scan_tf(s,sym):
 
             elif p_now <= bb_low_now and bb_low_now < bb_low_prev:
                 if can_alert(sym):
-                    msg=(f"🟥⏬ <b>ALERTA DIÁRIO SHORT</b>\n\n"
+                    msg=(f"🟥⏬ <b>DIÁRIO SHORT</b>\n\n"
                          f"<b>💎 {nome} 💎</b>\n"
                          f"💰 Preço: {p_now:.6f}\n"
                          f"📏 Dist. EMA 200: {dist:.2%}\n"
@@ -146,7 +146,7 @@ async def scan_tf(s,sym):
 
         if p_now >= bb_up_now and bb_up_now > bb_up_prev:
             if can_alert_4h(sym):
-                msg=(f"🟦⏫ <b>LONG DIÁRIO 4H</b>\n\n"
+                msg=(f"🟦⏫ <b>LONG 4H</b>\n\n"
                      f"<b>💎 {nome} 💎</b>\n"
                      f"💰 Preço: {p_now:.6f}\n"
                      f"📏 Dist. EMA 200: {dist:.2%}\n"
@@ -155,7 +155,7 @@ async def scan_tf(s,sym):
 
         elif p_now <= bb_low_now and bb_low_now < bb_low_prev:
             if can_alert_4h(sym):
-                msg=(f"🟧⏬ <b>LONG DIÁRIO 4H</b>\n\n"
+                msg=(f"🟧⏬ <b>SHORT 4H</b>\n\n"
                      f"<b>💎 {nome} 💎</b>\n"
                      f"💰 Preço: {p_now:.6f}\n"
                      f"📏 Dist. EMA 200: {dist:.2%}\n"

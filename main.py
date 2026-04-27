@@ -97,7 +97,7 @@ async def scan_tf(s,sym):
         bb_up_prev, bb_low_prev = calc_bb(close[:-1])
 
         dist = abs(p_now - ema200) / ema200
-        perto = dist <= 0.25
+        perto = dist <= 0.50
         cruzou = (p_prev < ema200 <= p_now) or (p_prev > ema200 >= p_now)
 
         if not (perto or cruzou): pass
@@ -137,7 +137,7 @@ async def scan_tf(s,sym):
         bb_up_prev, bb_low_prev = calc_bb(close[:-1])
 
         dist = abs(p_now - ema200) / ema200
-        perto = dist <= 0.04
+        perto = dist <= 0.06
         cruzou = (p_prev < ema200 <= p_now) or (p_prev > ema200 >= p_now)
 
         if not (perto or cruzou): return

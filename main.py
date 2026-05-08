@@ -65,7 +65,7 @@ def can_alert(sym):
     key=f"1d_{sym}"
     cd=cooldowns.get(key,0)
     n=time.time()
-    if n-cd>=25900:
+    if n-cd>=259200:
         cooldowns[key]=n
         return True
     return False
